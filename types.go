@@ -1,7 +1,6 @@
 package snake
 
 import (
-	"context"
 	"time"
 )
 
@@ -18,19 +17,6 @@ const (
 	TaskStatusSkipped TaskStatus = "SKIPPED"
 )
 
-// Field represents a structured logging field
-type Field struct {
-	Key   string
-	Value any
-}
-
-// Logger defines the interface for logging within the framework
-type Logger interface {
-	Info(ctx context.Context, msg string, fields ...Field)
-	Error(ctx context.Context, msg string, err error, fields ...Field)
-	With(fields ...Field) Logger
-}
-
 // Task represents a single executable unit in the workflow
 type Task struct {
 	ID          string
@@ -38,4 +24,27 @@ type Task struct {
 	Handler     HandlerFunc
 	Middlewares []HandlerFunc
 	Timeout     time.Duration
+}
+
+// TaskReport contains execution information for a single task
+type TaskReport struct {
+	TaskID    string
+	Status    TaskStatus
+	Err       error
+	StartTime time.Time
+	EndTime   time.Time
+	Duration  time.Duration
+}
+
+// ExecutionResult contains the comprehensive output of a DAG execution
+type ExecutionResult struct {
+	ExecutionID string
+	Success     bool
+	Reports     map[string]*TaskReport
+	Store       Datastore
+}
+
+// GetResult retrieves a specific task's output by Task ID from the Datastore
+func (r *ExecutionResult) GetResult(taskID string) (any, bool) {
+	return r.Store.Get(taskID)
 }
