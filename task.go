@@ -1,0 +1,73 @@
+package snake
+
+import "time"
+
+// TaskStatus represents the execution state of a task
+type TaskStatus string
+
+const (
+	TaskStatusPending TaskStatus = "PENDING"
+	TaskStatusSuccess TaskStatus = "SUCCESS"
+	TaskStatusFailed  TaskStatus = "FAILED"
+	TaskStatusSkipped TaskStatus = "SKIPPED"
+)
+
+// Task represents a single executable unit in the workflow
+type Task struct {
+	id          string
+	dependsOn   []string
+	handler     HandlerFunc
+	middlewares []HandlerFunc
+	timeout     time.Duration
+}
+
+// NewTask creates a new Task with the given ID and handler, applying any provided options
+func NewTask(id string, handler HandlerFunc, options ...TaskOption) *Task {
+	task := &Task{
+		id:          id,
+		handler:     handler,
+		dependsOn:   []string{},
+		middlewares: []HandlerFunc{},
+		timeout:     0, // zero means no timeout
+	}
+
+	for _, opt := range options {
+		opt(task)
+	}
+
+	return task
+}
+
+// WithDependsOn sets the dependencies for a task
+func WithDependsOn(deps ...string) TaskOption {
+	return func(t *Task) {
+		t.dependsOn = deps
+	}
+}
+
+// WithTimeout sets the timeout for a task
+func WithTimeout(timeout time.Duration) TaskOption {
+	return func(t *Task) {
+		t.timeout = timeout
+	}
+}
+
+// WithMiddlewares sets the middlewares for a task
+func WithMiddlewares(middlewares ...HandlerFunc) TaskOption {
+	return func(t *Task) {
+		t.middlewares = middlewares
+	}
+}
+
+// TaskOption is a function that configures an Task
+type TaskOption func(*Task)
+
+// TaskReport contains execution information for a single task
+type TaskReport struct {
+	TaskID    string
+	Status    TaskStatus
+	Err       error
+	StartTime time.Time
+	EndTime   time.Time
+	Duration  time.Duration
+}

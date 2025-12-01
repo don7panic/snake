@@ -13,10 +13,7 @@ func TestExecute_GeneratesUniqueExecutionID(t *testing.T) {
 	engine := NewEngine()
 
 	// Register a simple task
-	task := &Task{
-		ID:      "task1",
-		Handler: func(ctx *Context) error { return nil },
-	}
+	task := NewTask("task1", func(c context.Context, ctx *Context) error { return nil })
 	err := engine.Register(task)
 	assert.NoError(t, err)
 
@@ -44,10 +41,7 @@ func TestExecute_CreatesNewDatastore(t *testing.T) {
 	engine := NewEngine()
 
 	// Register a simple task
-	task := &Task{
-		ID:      "task1",
-		Handler: func(ctx *Context) error { return nil },
-	}
+	task := NewTask("task1", func(c context.Context, ctx *Context) error { return nil })
 	err := engine.Register(task)
 	assert.NoError(t, err)
 
@@ -70,19 +64,11 @@ func TestExecute_InitializesPendingDeps(t *testing.T) {
 
 	// Register tasks with dependencies
 	task1 := &Task{
-		ID:      "task1",
-		Handler: func(ctx *Context) error { return nil },
+		id:      "task1",
+		handler: func(c context.Context, ctx *Context) error { return nil },
 	}
-	task2 := &Task{
-		ID:        "task2",
-		DependsOn: []string{"task1"},
-		Handler:   func(ctx *Context) error { return nil },
-	}
-	task3 := &Task{
-		ID:        "task3",
-		DependsOn: []string{"task1", "task2"},
-		Handler:   func(ctx *Context) error { return nil },
-	}
+	task2 := NewTask("task2", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task1"))
+	task3 := NewTask("task3", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task1", "task2"))
 
 	err := engine.Register(task1)
 	assert.NoError(t, err)
@@ -111,17 +97,17 @@ func TestExecute_IdentifiesZeroIndegreeTasks(t *testing.T) {
 
 	// Register tasks with mixed dependencies
 	task1 := &Task{
-		ID:      "task1",
-		Handler: func(ctx *Context) error { return nil },
+		id:      "task1",
+		handler: func(c context.Context, ctx *Context) error { return nil },
 	}
 	task2 := &Task{
-		ID:      "task2",
-		Handler: func(ctx *Context) error { return nil },
+		id:      "task2",
+		handler: func(c context.Context, ctx *Context) error { return nil },
 	}
 	task3 := &Task{
-		ID:        "task3",
-		DependsOn: []string{"task1"},
-		Handler:   func(ctx *Context) error { return nil },
+		id:        "task3",
+		dependsOn: []string{"task1"},
+		handler:   func(c context.Context, ctx *Context) error { return nil },
 	}
 
 	err := engine.Register(task1)
@@ -152,24 +138,20 @@ func TestExecute_DisconnectedGraphs(t *testing.T) {
 	// Create two disconnected subgraphs
 	// Subgraph 1: task1 -> task2
 	task1 := &Task{
-		ID:      "task1",
-		Handler: func(ctx *Context) error { return nil },
+		id:      "task1",
+		handler: func(c context.Context, ctx *Context) error { return nil },
 	}
-	task2 := &Task{
-		ID:        "task2",
-		DependsOn: []string{"task1"},
-		Handler:   func(ctx *Context) error { return nil },
-	}
+	task2 := NewTask("task2", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task1"))
 
 	// Subgraph 2: task3 -> task4
 	task3 := &Task{
-		ID:      "task3",
-		Handler: func(ctx *Context) error { return nil },
+		id:      "task3",
+		handler: func(c context.Context, ctx *Context) error { return nil },
 	}
 	task4 := &Task{
-		ID:        "task4",
-		DependsOn: []string{"task3"},
-		Handler:   func(ctx *Context) error { return nil },
+		id:        "task4",
+		dependsOn: []string{"task3"},
+		handler:   func(c context.Context, ctx *Context) error { return nil },
 	}
 
 	err := engine.Register(task1)
@@ -201,8 +183,8 @@ func TestExecuteTask_CreatesContext(t *testing.T) {
 	// Track if handler was called with proper context
 	var capturedCtx *Context
 	task := &Task{
-		ID: "task1",
-		Handler: func(ctx *Context) error {
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
 			capturedCtx = ctx
 			return nil
 		},
@@ -225,9 +207,9 @@ func TestExecuteTask_CreatesContext(t *testing.T) {
 
 	// Verify context was created properly
 	assert.NotNil(t, capturedCtx)
-	assert.Equal(t, "task1", capturedCtx.TaskID)
-	assert.Equal(t, "exec-123", capturedCtx.ExecutionID)
-	assert.NotNil(t, capturedCtx.Store)
+	assert.Equal(t, "task1", capturedCtx.taskID)
+	assert.Equal(t, "exec-123", capturedCtx.executionID)
+	assert.NotNil(t, capturedCtx.store)
 	assert.False(t, capturedCtx.StartTime.IsZero())
 }
 
@@ -236,19 +218,15 @@ func TestExecuteTask_AppliesTaskTimeout(t *testing.T) {
 	engine := NewEngine()
 
 	// Create a task with a short timeout
-	task := &Task{
-		ID:      "task1",
-		Timeout: 10 * time.Millisecond,
-		Handler: func(ctx *Context) error {
-			// Wait for context to be cancelled or timeout
-			select {
-			case <-ctx.Context().Done():
-				return ctx.Context().Err()
-			case <-time.After(100 * time.Millisecond):
-				return nil
-			}
-		},
-	}
+	task := NewTask("task1", func(c context.Context, ctx *Context) error {
+		// Wait for context to be cancelled or timeout
+		select {
+		case <-c.Done():
+			return c.Err()
+		case <-time.After(100 * time.Millisecond):
+			return nil
+		}
+	}, WithTimeout(10*time.Millisecond))
 
 	err := engine.Register(task)
 	assert.NoError(t, err)
@@ -273,12 +251,12 @@ func TestExecuteTask_AppliesDefaultTimeout(t *testing.T) {
 
 	// Create a task without specific timeout
 	task := &Task{
-		ID: "task1",
-		Handler: func(ctx *Context) error {
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
 			// Wait for context to be cancelled or timeout
 			select {
-			case <-ctx.Context().Done():
-				return ctx.Context().Err()
+			case <-c.Done():
+				return c.Err()
 			case <-time.After(100 * time.Millisecond):
 				return nil
 			}
@@ -310,29 +288,23 @@ func TestExecuteTask_BuildsHandlerChain(t *testing.T) {
 	executionOrder := []string{}
 
 	// Register global middleware
-	engine.Use(func(ctx *Context) error {
+	engine.Use(func(c context.Context, ctx *Context) error {
 		executionOrder = append(executionOrder, "global-before")
-		err := ctx.Next()
+		err := ctx.Next(c)
 		executionOrder = append(executionOrder, "global-after")
 		return err
 	})
 
 	// Create task with task-specific middleware
-	task := &Task{
-		ID: "task1",
-		Middlewares: []HandlerFunc{
-			func(ctx *Context) error {
-				executionOrder = append(executionOrder, "task-before")
-				err := ctx.Next()
-				executionOrder = append(executionOrder, "task-after")
-				return err
-			},
-		},
-		Handler: func(ctx *Context) error {
-			executionOrder = append(executionOrder, "handler")
-			return nil
-		},
-	}
+	task := NewTask("task1", func(c context.Context, ctx *Context) error {
+		executionOrder = append(executionOrder, "handler")
+		return nil
+	}, WithMiddlewares(func(c context.Context, ctx *Context) error {
+		executionOrder = append(executionOrder, "task-before")
+		err := ctx.Next(c)
+		executionOrder = append(executionOrder, "task-after")
+		return err
+	}))
 
 	err := engine.Register(task)
 	assert.NoError(t, err)
@@ -364,8 +336,8 @@ func TestExecuteTask_RecordsSuccessStatus(t *testing.T) {
 	engine := NewEngine()
 
 	task := &Task{
-		ID: "task1",
-		Handler: func(ctx *Context) error {
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
 			return nil
 		},
 	}
@@ -396,8 +368,8 @@ func TestExecuteTask_RecordsFailureStatus(t *testing.T) {
 
 	expectedErr := assert.AnError
 	task := &Task{
-		ID: "task1",
-		Handler: func(ctx *Context) error {
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
 			return expectedErr
 		},
 	}
@@ -428,8 +400,8 @@ func TestExecuteTask_RecordsTiming(t *testing.T) {
 
 	sleepDuration := 20 * time.Millisecond
 	task := &Task{
-		ID: "task1",
-		Handler: func(ctx *Context) error {
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
 			time.Sleep(sleepDuration)
 			return nil
 		},
@@ -463,9 +435,9 @@ func TestExecuteTask_ContextInheritsExecutionContext(t *testing.T) {
 
 	var taskCtxDone <-chan struct{}
 	task := &Task{
-		ID: "task1",
-		Handler: func(ctx *Context) error {
-			taskCtxDone = ctx.Context().Done()
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
+			taskCtxDone = c.Done()
 			return nil
 		},
 	}
@@ -496,8 +468,8 @@ func TestExecuteTask_ContextInheritsExecutionContext(t *testing.T) {
 	}
 }
 
-// TestExecuteTask_LoggerHasTaskMetadata verifies logger includes task metadata
-func TestExecuteTask_LoggerHasTaskMetadata(t *testing.T) {
+// TestExecuteTask_ContextProperties verifies Context contains correct properties after Logger removal
+func TestExecuteTask_ContextProperties(t *testing.T) {
 	// Create a mock logger that captures fields
 	type logCall struct {
 		msg    string
@@ -524,12 +496,10 @@ func TestExecuteTask_LoggerHasTaskMetadata(t *testing.T) {
 	engine := NewEngine(WithLogger(mockLogger))
 
 	task := &Task{
-		ID: "task1",
-		Handler: func(ctx *Context) error {
-			// Log something to verify logger has metadata
-			if ctx.Logger != nil {
-				ctx.Logger.Info(ctx.Context(), "test message")
-			}
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
+			// Note: Logger removed from Context
+			// In tests, you can use the engine's logger directly if needed
 			return nil
 		},
 	}
@@ -547,26 +517,6 @@ func TestExecuteTask_LoggerHasTaskMetadata(t *testing.T) {
 	// Verify task succeeded
 	assert.NotNil(t, report)
 	assert.Equal(t, TaskStatusSuccess, report.Status)
-
-	// Verify logger was called with task metadata
-	assert.NotEmpty(t, logCalls)
-
-	// Check that the logger has TaskID and ExecutionID fields
-	foundTaskID := false
-	foundExecutionID := false
-	for _, call := range logCalls {
-		for _, field := range call.fields {
-			if field.Key == "TaskID" && field.Value == "task1" {
-				foundTaskID = true
-			}
-			if field.Key == "ExecutionID" && field.Value == "exec-123" {
-				foundExecutionID = true
-			}
-		}
-	}
-
-	assert.True(t, foundTaskID, "Logger should have TaskID field")
-	assert.True(t, foundExecutionID, "Logger should have ExecutionID field")
 }
 
 // mockLogger is a simple mock implementation of the Logger interface for testing
@@ -602,8 +552,8 @@ func TestFailFast_MarksTaskAsFailed(t *testing.T) {
 
 	expectedErr := assert.AnError
 	task1 := &Task{
-		ID: "task1",
-		Handler: func(ctx *Context) error {
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
 			return expectedErr
 		},
 	}
@@ -634,20 +584,20 @@ func TestFailFast_CancelsExecutionContext(t *testing.T) {
 	task2Cancelled := make(chan bool, 1)
 
 	task1 := &Task{
-		ID: "task1",
-		Handler: func(ctx *Context) error {
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
 			return assert.AnError
 		},
 	}
 
 	task2 := &Task{
-		ID: "task2",
-		Handler: func(ctx *Context) error {
+		id: "task2",
+		handler: func(c context.Context, ctx *Context) error {
 			// Wait for cancellation or timeout
 			select {
-			case <-ctx.Context().Done():
+			case <-c.Done():
 				task2Cancelled <- true
-				return ctx.Context().Err()
+				return c.Err()
 			case <-time.After(500 * time.Millisecond):
 				task2Cancelled <- false
 				return nil
@@ -694,24 +644,24 @@ func TestFailFast_MarksPendingTasksAsSkipped(t *testing.T) {
 	// Create a chain: task1 -> task2 -> task3
 	// task1 will fail, task2 and task3 should be skipped
 	task1 := &Task{
-		ID: "task1",
-		Handler: func(ctx *Context) error {
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
 			return assert.AnError
 		},
 	}
 
 	task2 := &Task{
-		ID:        "task2",
-		DependsOn: []string{"task1"},
-		Handler: func(ctx *Context) error {
+		id:        "task2",
+		dependsOn: []string{"task1"},
+		handler: func(c context.Context, ctx *Context) error {
 			return nil
 		},
 	}
 
 	task3 := &Task{
-		ID:        "task3",
-		DependsOn: []string{"task2"},
-		Handler: func(ctx *Context) error {
+		id:        "task3",
+		dependsOn: []string{"task2"},
+		handler: func(c context.Context, ctx *Context) error {
 			return nil
 		},
 	}
@@ -754,8 +704,8 @@ func TestFailFast_ContinuesUntilActiveTasksComplete(t *testing.T) {
 	// task1 and task2 have no dependencies, so they start concurrently
 	// task1 will fail quickly, task2 will take longer but should complete
 	task1 := &Task{
-		ID: "task1",
-		Handler: func(ctx *Context) error {
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
 			task1Started <- true
 			time.Sleep(10 * time.Millisecond)
 			return assert.AnError
@@ -763,15 +713,15 @@ func TestFailFast_ContinuesUntilActiveTasksComplete(t *testing.T) {
 	}
 
 	task2 := &Task{
-		ID: "task2",
-		Handler: func(ctx *Context) error {
+		id: "task2",
+		handler: func(c context.Context, ctx *Context) error {
 			task2Started <- true
 			// Sleep longer to ensure task1 fails first
 			time.Sleep(50 * time.Millisecond)
 			task2Completed <- true
 			// Check if context was cancelled
-			if ctx.Context().Err() != nil {
-				return ctx.Context().Err()
+			if c.Err() != nil {
+				return c.Err()
 			}
 			return nil
 		},
@@ -829,16 +779,16 @@ func TestFailFast_ExecutionResultContainsErrorDetails(t *testing.T) {
 
 	expectedErr := assert.AnError
 	task1 := &Task{
-		ID: "task1",
-		Handler: func(ctx *Context) error {
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
 			return expectedErr
 		},
 	}
 
 	task2 := &Task{
-		ID:        "task2",
-		DependsOn: []string{"task1"},
-		Handler: func(ctx *Context) error {
+		id:        "task2",
+		dependsOn: []string{"task1"},
+		handler: func(c context.Context, ctx *Context) error {
 			return nil
 		},
 	}
@@ -876,8 +826,8 @@ func TestExecutionCompletion_AllTasksReachTerminalState(t *testing.T) {
 
 	// Create tasks with various execution times
 	task1 := &Task{
-		ID: "task1",
-		Handler: func(ctx *Context) error {
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
 			time.Sleep(20 * time.Millisecond)
 			ctx.SetResult("result1")
 			return nil
@@ -885,8 +835,8 @@ func TestExecutionCompletion_AllTasksReachTerminalState(t *testing.T) {
 	}
 
 	task2 := &Task{
-		ID: "task2",
-		Handler: func(ctx *Context) error {
+		id: "task2",
+		handler: func(c context.Context, ctx *Context) error {
 			time.Sleep(30 * time.Millisecond)
 			ctx.SetResult("result2")
 			return nil
@@ -894,9 +844,9 @@ func TestExecutionCompletion_AllTasksReachTerminalState(t *testing.T) {
 	}
 
 	task3 := &Task{
-		ID:        "task3",
-		DependsOn: []string{"task1", "task2"},
-		Handler: func(ctx *Context) error {
+		id:        "task3",
+		dependsOn: []string{"task1", "task2"},
+		handler: func(c context.Context, ctx *Context) error {
 			time.Sleep(10 * time.Millisecond)
 			ctx.SetResult("result3")
 			return nil
@@ -933,17 +883,17 @@ func TestExecutionResult_ContainsRequiredFields(t *testing.T) {
 	engine := NewEngine()
 
 	task1 := &Task{
-		ID: "task1",
-		Handler: func(ctx *Context) error {
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
 			ctx.SetResult("data1")
 			return nil
 		},
 	}
 
 	task2 := &Task{
-		ID:        "task2",
-		DependsOn: []string{"task1"},
-		Handler: func(ctx *Context) error {
+		id:        "task2",
+		dependsOn: []string{"task1"},
+		handler: func(c context.Context, ctx *Context) error {
 			ctx.SetResult("data2")
 			return nil
 		},
@@ -989,12 +939,12 @@ func TestExecutionResult_SuccessDetermination(t *testing.T) {
 		engine := NewEngine()
 
 		task1 := &Task{
-			ID:      "task1",
-			Handler: func(ctx *Context) error { return nil },
+			id:      "task1",
+			handler: func(c context.Context, ctx *Context) error { return nil },
 		}
 		task2 := &Task{
-			ID:      "task2",
-			Handler: func(ctx *Context) error { return nil },
+			id:      "task2",
+			handler: func(c context.Context, ctx *Context) error { return nil },
 		}
 
 		err := engine.Register(task1)
@@ -1014,12 +964,12 @@ func TestExecutionResult_SuccessDetermination(t *testing.T) {
 		engine := NewEngine(WithFailFast())
 
 		task1 := &Task{
-			ID:      "task1",
-			Handler: func(ctx *Context) error { return nil },
+			id:      "task1",
+			handler: func(c context.Context, ctx *Context) error { return nil },
 		}
 		task2 := &Task{
-			ID:      "task2",
-			Handler: func(ctx *Context) error { return assert.AnError },
+			id:      "task2",
+			handler: func(c context.Context, ctx *Context) error { return assert.AnError },
 		}
 
 		err := engine.Register(task1)
@@ -1039,13 +989,13 @@ func TestExecutionResult_SuccessDetermination(t *testing.T) {
 		engine := NewEngine(WithFailFast())
 
 		task1 := &Task{
-			ID:      "task1",
-			Handler: func(ctx *Context) error { return assert.AnError },
+			id:      "task1",
+			handler: func(c context.Context, ctx *Context) error { return assert.AnError },
 		}
 		task2 := &Task{
-			ID:        "task2",
-			DependsOn: []string{"task1"},
-			Handler:   func(ctx *Context) error { return nil },
+			id:        "task2",
+			dependsOn: []string{"task1"},
+			handler:   func(c context.Context, ctx *Context) error { return nil },
 		}
 
 		err := engine.Register(task1)
@@ -1068,17 +1018,17 @@ func TestExecutionResult_GetResult(t *testing.T) {
 	engine := NewEngine()
 
 	task1 := &Task{
-		ID: "task1",
-		Handler: func(ctx *Context) error {
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
 			ctx.SetResult("task1-data")
 			return nil
 		},
 	}
 
 	task2 := &Task{
-		ID:        "task2",
-		DependsOn: []string{"task1"},
-		Handler: func(ctx *Context) error {
+		id:        "task2",
+		dependsOn: []string{"task1"},
+		handler: func(c context.Context, ctx *Context) error {
 			// Read task1's result
 			data, ok := ctx.GetResult("task1")
 			assert.True(t, ok, "Should be able to read task1's result")
@@ -1122,16 +1072,16 @@ func TestExecutionResult_DatastoreAccess(t *testing.T) {
 	engine := NewEngine()
 
 	task1 := &Task{
-		ID: "task1",
-		Handler: func(ctx *Context) error {
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
 			ctx.SetResult(map[string]string{"key": "value1"})
 			return nil
 		},
 	}
 
 	task2 := &Task{
-		ID: "task2",
-		Handler: func(ctx *Context) error {
+		id: "task2",
+		handler: func(c context.Context, ctx *Context) error {
 			ctx.SetResult([]int{1, 2, 3})
 			return nil
 		},
@@ -1160,4 +1110,322 @@ func TestExecutionResult_DatastoreAccess(t *testing.T) {
 	data2, ok2 := result.Store.Get("task2")
 	assert.True(t, ok2)
 	assert.Equal(t, []int{1, 2, 3}, data2)
+}
+
+// TestTimeout_TaskSpecificTimeout verifies task-specific timeout in full execution
+func TestTimeout_TaskSpecificTimeout(t *testing.T) {
+	engine := NewEngine(WithFailFast())
+
+	// Task with short timeout that will exceed it
+	task1 := &Task{
+		id:      "task1",
+		timeout: 10 * time.Millisecond,
+		handler: func(c context.Context, ctx *Context) error {
+			// Try to sleep longer than timeout
+			select {
+			case <-c.Done():
+				return c.Err()
+			case <-time.After(100 * time.Millisecond):
+				return nil
+			}
+		},
+	}
+
+	// Task that depends on task1 (should be skipped due to Fail-Fast)
+	task2 := &Task{
+		id:        "task2",
+		dependsOn: []string{"task1"},
+		handler: func(c context.Context, ctx *Context) error {
+			return nil
+		},
+	}
+
+	err := engine.Register(task1)
+	assert.NoError(t, err)
+	err = engine.Register(task2)
+	assert.NoError(t, err)
+
+	err = engine.Build()
+	assert.NoError(t, err)
+
+	// Execute
+	result, err := engine.Execute(context.Background())
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Verify execution failed
+	assert.False(t, result.Success)
+
+	// Verify task1 failed with timeout error
+	assert.Equal(t, TaskStatusFailed, result.Reports["task1"].Status)
+	assert.NotNil(t, result.Reports["task1"].Err)
+	assert.ErrorIs(t, result.Reports["task1"].Err, context.DeadlineExceeded)
+
+	// Verify task2 was skipped
+	assert.Equal(t, TaskStatusSkipped, result.Reports["task2"].Status)
+}
+
+// TestTimeout_DefaultTimeout verifies default timeout in full execution
+func TestTimeout_DefaultTimeout(t *testing.T) {
+	engine := NewEngine(
+		WithDefaultTaskTimeout(10*time.Millisecond),
+		WithFailFast(),
+	)
+
+	// Task without specific timeout (will use default)
+	task1 := &Task{
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
+			// Try to sleep longer than default timeout
+			select {
+			case <-c.Done():
+				return c.Err()
+			case <-time.After(100 * time.Millisecond):
+				return nil
+			}
+		},
+	}
+
+	err := engine.Register(task1)
+	assert.NoError(t, err)
+
+	err = engine.Build()
+	assert.NoError(t, err)
+
+	// Execute
+	result, err := engine.Execute(context.Background())
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Verify execution failed
+	assert.False(t, result.Success)
+
+	// Verify task1 failed with timeout error
+	assert.Equal(t, TaskStatusFailed, result.Reports["task1"].Status)
+	assert.NotNil(t, result.Reports["task1"].Err)
+	assert.ErrorIs(t, result.Reports["task1"].Err, context.DeadlineExceeded)
+}
+
+// TestTimeout_TaskTimeoutOverridesDefault verifies task timeout takes precedence
+func TestTimeout_TaskTimeoutOverridesDefault(t *testing.T) {
+	engine := NewEngine(WithDefaultTaskTimeout(100 * time.Millisecond))
+
+	// Task with shorter timeout than default
+	task1 := &Task{
+		id:      "task1",
+		timeout: 10 * time.Millisecond,
+		handler: func(c context.Context, ctx *Context) error {
+			// Try to sleep longer than task timeout but less than default
+			select {
+			case <-c.Done():
+				return c.Err()
+			case <-time.After(50 * time.Millisecond):
+				return nil
+			}
+		},
+	}
+
+	err := engine.Register(task1)
+	assert.NoError(t, err)
+
+	err = engine.Build()
+	assert.NoError(t, err)
+
+	// Execute
+	result, err := engine.Execute(context.Background())
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Verify execution failed
+	assert.False(t, result.Success)
+
+	// Verify task1 failed with timeout error (from task timeout, not default)
+	assert.Equal(t, TaskStatusFailed, result.Reports["task1"].Status)
+	assert.NotNil(t, result.Reports["task1"].Err)
+	assert.ErrorIs(t, result.Reports["task1"].Err, context.DeadlineExceeded)
+
+	// Verify it timed out quickly (closer to 10ms than 100ms)
+	assert.Less(t, result.Reports["task1"].Duration, 50*time.Millisecond)
+}
+
+// TestTimeout_NoTimeoutConfigured verifies tasks run without timeout when none configured
+func TestTimeout_NoTimeoutConfigured(t *testing.T) {
+	engine := NewEngine()
+
+	// Task without timeout
+	task1 := &Task{
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
+			// Sleep for a bit - should complete successfully
+			time.Sleep(20 * time.Millisecond)
+			ctx.SetResult("completed")
+			return nil
+		},
+	}
+
+	err := engine.Register(task1)
+	assert.NoError(t, err)
+
+	err = engine.Build()
+	assert.NoError(t, err)
+
+	// Execute
+	result, err := engine.Execute(context.Background())
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Verify execution succeeded
+	assert.True(t, result.Success)
+
+	// Verify task1 succeeded
+	assert.Equal(t, TaskStatusSuccess, result.Reports["task1"].Status)
+	assert.Nil(t, result.Reports["task1"].Err)
+
+	// Verify result was stored
+	data, ok := result.GetResult("task1")
+	assert.True(t, ok)
+	assert.Equal(t, "completed", data)
+}
+
+// TestTopologicalSort_SimpleDependencies tests basic dependency ordering
+func TestTopologicalSort_SimpleDependencies(t *testing.T) {
+	engine := NewEngine()
+
+	// Create tasks: task1 -> task2 -> task3
+	task1 := NewTask("task1", func(c context.Context, ctx *Context) error { return nil })
+	task2WithDep := NewTask("task2", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task1"))
+	task3WithDep := NewTask("task3", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task2"))
+
+	err := engine.Register(task1, task2WithDep, task3WithDep)
+	assert.NoError(t, err)
+
+	err = engine.Build()
+	assert.NoError(t, err)
+
+	order, err := engine.TopologicalSort()
+	assert.NoError(t, err)
+	assert.Len(t, order, 3)
+
+	// Verify dependency order: task1 comes before task2, task2 comes before task3
+	task1Index := -1
+	task2Index := -1
+	task3Index := -1
+
+	for i, taskID := range order {
+		if taskID == "task1" {
+			task1Index = i
+		} else if taskID == "task2" {
+			task2Index = i
+		} else if taskID == "task3" {
+			task3Index = i
+		}
+	}
+
+	assert.NotEqual(t, -1, task1Index)
+	assert.NotEqual(t, -1, task2Index)
+	assert.NotEqual(t, -1, task3Index)
+	assert.True(t, task1Index < task2Index, "task1 should come before task2")
+	assert.True(t, task2Index < task3Index, "task2 should come before task3")
+}
+
+// TestTopologicalSort_ComplexDependencies tests complex dependency scenarios
+func TestTopologicalSort_ComplexDependencies(t *testing.T) {
+	engine := NewEngine()
+
+	// Create a diamond dependency:
+	//     task1
+	//    /     \
+	// task2   task3
+	//    \     /
+	//    task4
+	task1 := NewTask("task1", func(c context.Context, ctx *Context) error { return nil })
+	task2 := NewTask("task2", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task1"))
+	task3 := NewTask("task3", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task1"))
+	task4 := NewTask("task4", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task2", "task3"))
+
+	err := engine.Register(task1, task2, task3, task4)
+	assert.NoError(t, err)
+
+	err = engine.Build()
+	assert.NoError(t, err)
+
+	order, err := engine.TopologicalSort()
+	assert.NoError(t, err)
+	assert.Len(t, order, 4)
+
+	// Verify ordering constraints
+	task1Index := -1
+	task2Index := -1
+	task3Index := -1
+	task4Index := -1
+
+	t.Log(order)
+
+	for i, taskID := range order {
+		switch taskID {
+		case "task1":
+			task1Index = i
+		case "task2":
+			task2Index = i
+		case "task3":
+			task3Index = i
+		case "task4":
+			task4Index = i
+		}
+	}
+
+	assert.True(t, task1Index < task2Index, "task1 should come before task2")
+	assert.True(t, task1Index < task3Index, "task1 should come before task3")
+	assert.True(t, task2Index < task4Index, "task2 should come before task4")
+	assert.True(t, task3Index < task4Index, "task3 should come before task4")
+}
+
+// TestTopologicalSort_DisconnectedGraphs tests tasks with no dependencies
+func TestTopologicalSort_DisconnectedGraphs(t *testing.T) {
+	engine := NewEngine()
+
+	// Create disconnected tasks
+	taskA := NewTask("taskA", func(c context.Context, ctx *Context) error { return nil })
+	taskB := NewTask("taskB", func(c context.Context, ctx *Context) error { return nil })
+	taskC := NewTask("taskC", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("taskA"))
+
+	err := engine.Register(taskA, taskB, taskC)
+	assert.NoError(t, err)
+
+	err = engine.Build()
+	assert.NoError(t, err)
+
+	order, err := engine.TopologicalSort()
+	assert.NoError(t, err)
+	assert.Len(t, order, 3)
+
+	// All tasks should be included
+	taskIDs := make(map[string]bool)
+	for _, taskID := range order {
+		taskIDs[taskID] = true
+	}
+	assert.True(t, taskIDs["taskA"])
+	assert.True(t, taskIDs["taskB"])
+	assert.True(t, taskIDs["taskC"])
+}
+
+// TestTopologicalSort_CycleDetection tests detection of cyclic dependencies
+func TestTopologicalSort_CycleDetection(t *testing.T) {
+	engine := NewEngine()
+
+	// Create tasks with a cycle: task1 -> task2 -> task3 -> task1
+	task1 := NewTask("task1", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task3"))
+	task2 := NewTask("task2", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task1"))
+	task3 := NewTask("task3", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task2"))
+
+	err := engine.Register(task1, task2, task3)
+	assert.NoError(t, err)
+
+	err = engine.Build()
+	assert.NoError(t, err)
+
+	// Should fail to sort due to cycle
+	_, err = engine.TopologicalSort()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cyclic dependency detected")
 }

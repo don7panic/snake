@@ -18,8 +18,8 @@ func TestParallelExecution_SimpleDependency(t *testing.T) {
 
 	// task1 -> task2 -> task3
 	task1 := &Task{
-		ID: "task1",
-		Handler: func(ctx *Context) error {
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
 			mu.Lock()
 			executionOrder = append(executionOrder, "task1")
 			mu.Unlock()
@@ -29,9 +29,9 @@ func TestParallelExecution_SimpleDependency(t *testing.T) {
 	}
 
 	task2 := &Task{
-		ID:        "task2",
-		DependsOn: []string{"task1"},
-		Handler: func(ctx *Context) error {
+		id:        "task2",
+		dependsOn: []string{"task1"},
+		handler: func(c context.Context, ctx *Context) error {
 			mu.Lock()
 			executionOrder = append(executionOrder, "task2")
 			mu.Unlock()
@@ -45,9 +45,9 @@ func TestParallelExecution_SimpleDependency(t *testing.T) {
 	}
 
 	task3 := &Task{
-		ID:        "task3",
-		DependsOn: []string{"task2"},
-		Handler: func(ctx *Context) error {
+		id:        "task3",
+		dependsOn: []string{"task2"},
+		handler: func(c context.Context, ctx *Context) error {
 			mu.Lock()
 			executionOrder = append(executionOrder, "task3")
 			mu.Unlock()
@@ -95,10 +95,10 @@ func TestParallelExecution_ParallelTasks(t *testing.T) {
 	for i := 1; i <= 3; i++ {
 		taskID := "task" + string(rune('0'+i))
 		task := &Task{
-			ID: taskID,
-			Handler: func(ctx *Context) error {
+			id: taskID,
+			handler: func(c context.Context, ctx *Context) error {
 				mu.Lock()
-				startTimes[ctx.TaskID] = time.Now()
+				startTimes[ctx.taskID] = time.Now()
 				mu.Unlock()
 				time.Sleep(50 * time.Millisecond)
 				return nil
@@ -151,8 +151,8 @@ func TestParallelExecution_DiamondDependency(t *testing.T) {
 	//     task4
 
 	task1 := &Task{
-		ID: "task1",
-		Handler: func(ctx *Context) error {
+		id: "task1",
+		handler: func(c context.Context, ctx *Context) error {
 			mu.Lock()
 			executionOrder = append(executionOrder, "task1")
 			mu.Unlock()
@@ -162,9 +162,9 @@ func TestParallelExecution_DiamondDependency(t *testing.T) {
 	}
 
 	task2 := &Task{
-		ID:        "task2",
-		DependsOn: []string{"task1"},
-		Handler: func(ctx *Context) error {
+		id:        "task2",
+		dependsOn: []string{"task1"},
+		handler: func(c context.Context, ctx *Context) error {
 			mu.Lock()
 			executionOrder = append(executionOrder, "task2")
 			mu.Unlock()
@@ -174,9 +174,9 @@ func TestParallelExecution_DiamondDependency(t *testing.T) {
 	}
 
 	task3 := &Task{
-		ID:        "task3",
-		DependsOn: []string{"task1"},
-		Handler: func(ctx *Context) error {
+		id:        "task3",
+		dependsOn: []string{"task1"},
+		handler: func(c context.Context, ctx *Context) error {
 			mu.Lock()
 			executionOrder = append(executionOrder, "task3")
 			mu.Unlock()
@@ -186,9 +186,9 @@ func TestParallelExecution_DiamondDependency(t *testing.T) {
 	}
 
 	task4 := &Task{
-		ID:        "task4",
-		DependsOn: []string{"task2", "task3"},
-		Handler: func(ctx *Context) error {
+		id:        "task4",
+		dependsOn: []string{"task2", "task3"},
+		handler: func(c context.Context, ctx *Context) error {
 			mu.Lock()
 			executionOrder = append(executionOrder, "task4")
 			mu.Unlock()
@@ -214,6 +214,10 @@ func TestParallelExecution_DiamondDependency(t *testing.T) {
 
 	err = engine.Build()
 	assert.NoError(t, err)
+
+	res, err := engine.TopologicalSort()
+	assert.NoError(t, err)
+	t.Log(res)
 
 	result, err := engine.Execute(context.Background())
 	assert.NoError(t, err)
@@ -254,8 +258,8 @@ func TestParallelExecution_ComplexDAG(t *testing.T) {
 
 	tasks := []*Task{
 		{
-			ID: "task1",
-			Handler: func(ctx *Context) error {
+			id: "task1",
+			handler: func(c context.Context, ctx *Context) error {
 				mu.Lock()
 				completed["task1"] = true
 				mu.Unlock()
@@ -263,8 +267,8 @@ func TestParallelExecution_ComplexDAG(t *testing.T) {
 			},
 		},
 		{
-			ID: "task2",
-			Handler: func(ctx *Context) error {
+			id: "task2",
+			handler: func(c context.Context, ctx *Context) error {
 				mu.Lock()
 				completed["task2"] = true
 				mu.Unlock()
@@ -272,9 +276,9 @@ func TestParallelExecution_ComplexDAG(t *testing.T) {
 			},
 		},
 		{
-			ID:        "task3",
-			DependsOn: []string{"task1", "task2"},
-			Handler: func(ctx *Context) error {
+			id:        "task3",
+			dependsOn: []string{"task1", "task2"},
+			handler: func(c context.Context, ctx *Context) error {
 				mu.Lock()
 				// Verify dependencies completed
 				assert.True(t, completed["task1"])
@@ -285,9 +289,9 @@ func TestParallelExecution_ComplexDAG(t *testing.T) {
 			},
 		},
 		{
-			ID:        "task4",
-			DependsOn: []string{"task2"},
-			Handler: func(ctx *Context) error {
+			id:        "task4",
+			dependsOn: []string{"task2"},
+			handler: func(c context.Context, ctx *Context) error {
 				mu.Lock()
 				assert.True(t, completed["task2"])
 				completed["task4"] = true
@@ -296,9 +300,9 @@ func TestParallelExecution_ComplexDAG(t *testing.T) {
 			},
 		},
 		{
-			ID:        "task5",
-			DependsOn: []string{"task2"},
-			Handler: func(ctx *Context) error {
+			id:        "task5",
+			dependsOn: []string{"task2"},
+			handler: func(c context.Context, ctx *Context) error {
 				mu.Lock()
 				assert.True(t, completed["task2"])
 				completed["task5"] = true
@@ -307,9 +311,9 @@ func TestParallelExecution_ComplexDAG(t *testing.T) {
 			},
 		},
 		{
-			ID:        "task6",
-			DependsOn: []string{"task3", "task4", "task5"},
-			Handler: func(ctx *Context) error {
+			id:        "task6",
+			dependsOn: []string{"task3", "task4", "task5"},
+			handler: func(c context.Context, ctx *Context) error {
 				mu.Lock()
 				// Verify all dependencies completed
 				assert.True(t, completed["task3"])
@@ -329,6 +333,10 @@ func TestParallelExecution_ComplexDAG(t *testing.T) {
 
 	err := engine.Build()
 	assert.NoError(t, err)
+
+	res, err := engine.TopologicalSort()
+	assert.NoError(t, err)
+	t.Log(res)
 
 	result, err := engine.Execute(context.Background())
 	assert.NoError(t, err)
@@ -359,22 +367,22 @@ func TestParallelExecution_DisconnectedSubgraphs(t *testing.T) {
 
 	tasks := []*Task{
 		{
-			ID:      "task1",
-			Handler: func(ctx *Context) error { return nil },
+			id:      "task1",
+			handler: func(c context.Context, ctx *Context) error { return nil },
 		},
 		{
-			ID:        "task2",
-			DependsOn: []string{"task1"},
-			Handler:   func(ctx *Context) error { return nil },
+			id:        "task2",
+			dependsOn: []string{"task1"},
+			handler:   func(c context.Context, ctx *Context) error { return nil },
 		},
 		{
-			ID:      "task3",
-			Handler: func(ctx *Context) error { return nil },
+			id:      "task3",
+			handler: func(c context.Context, ctx *Context) error { return nil },
 		},
 		{
-			ID:        "task4",
-			DependsOn: []string{"task3"},
-			Handler:   func(ctx *Context) error { return nil },
+			id:        "task4",
+			dependsOn: []string{"task3"},
+			handler:   func(c context.Context, ctx *Context) error { return nil },
 		},
 	}
 

@@ -22,7 +22,7 @@ type Option func(*Engine)
 // WithFailFast sets the error handling strategy to Fail-Fast mode
 func WithFailFast() Option {
 	return func(e *Engine) {
-		e.ErrorStrategy = FailFast
+		e.errorStrategy = FailFast
 	}
 }
 
@@ -35,14 +35,14 @@ func WithStore(store Datastore) Option {
 // WithGlobalTimeout sets the global execution timeout duration
 func WithGlobalTimeout(timeout time.Duration) Option {
 	return func(e *Engine) {
-		e.GlobalTimeout = timeout
+		e.globalTimeout = timeout
 	}
 }
 
 // WithDefaultTaskTimeout sets the default timeout for tasks that don't specify their own
 func WithDefaultTaskTimeout(timeout time.Duration) Option {
 	return func(e *Engine) {
-		e.DefaultTaskTimeout = timeout
+		e.defaultTaskTimeout = timeout
 	}
 }
 
@@ -65,9 +65,9 @@ type Engine struct {
 	indegree map[string]int      // incoming edge count
 
 	// options
-	ErrorStrategy      ErrorStrategy
-	GlobalTimeout      time.Duration
-	DefaultTaskTimeout time.Duration
+	errorStrategy      ErrorStrategy
+	globalTimeout      time.Duration
+	defaultTaskTimeout time.Duration
 }
 
 // NewEngine creates a new Engine with the provided options
@@ -80,7 +80,7 @@ func NewEngine(opts ...Option) *Engine {
 		logger:        newDefaultLogger(),
 		adj:           make(map[string][]string),
 		indegree:      make(map[string]int),
-		ErrorStrategy: FailFast,
+		errorStrategy: FailFast,
 	}
 
 	// Apply all provided options
@@ -96,29 +96,31 @@ func (e *Engine) Use(middleware ...HandlerFunc) {
 	e.middlewares = append(e.middlewares, middleware...)
 }
 
-// Register adds a task to the engine with validation
+// Register adds tasks to the engine with validation
 // Returns an error if:
 // - The task ID is empty
 // - The task ID is already registered
 // - The task handler is nil
-func (e *Engine) Register(task *Task) error {
-	// Validate non-empty ID
-	if task.ID == "" {
-		return ErrEmptyTaskID
-	}
+func (e *Engine) Register(tasks ...*Task) error {
+	for _, task := range tasks {
+		// Validate non-empty ID
+		if task.id == "" {
+			return ErrEmptyTaskID
+		}
 
-	// Validate non-nil handler
-	if task.Handler == nil {
-		return ErrEmptyTaskHandler
-	}
+		// Validate non-nil handler
+		if task.handler == nil {
+			return ErrEmptyTaskHandler
+		}
 
-	// Validate unique ID
-	if _, exists := e.tasks[task.ID]; exists {
-		return ErrTaskAlreadyExists
-	}
+		// Validate unique ID
+		if _, exists := e.tasks[task.id]; exists {
+			return ErrTaskAlreadyExists
+		}
 
-	// Store the task
-	e.tasks[task.ID] = task
+		// Store the task
+		e.tasks[task.id] = task
+	}
 	return nil
 }
 
@@ -137,7 +139,7 @@ func (e *Engine) Build() error {
 	// Build adjacency list and calculate indegree
 	for taskID, task := range e.tasks {
 		// For each dependency of this task
-		for _, depID := range task.DependsOn {
+		for _, depID := range task.dependsOn {
 			// Add edge from dependency to this task in adjacency list
 			e.adj[depID] = append(e.adj[depID], taskID)
 
@@ -149,22 +151,26 @@ func (e *Engine) Build() error {
 	return nil
 }
 
-// Validate checks the DAG for cycles and missing dependencies
-// It uses Kahn's algorithm for cycle detection via topological sort
+// TopologicalSort performs a topological sort on the DAG using Kahn's algorithm
+// Returns tasks in dependency order (tasks with no dependencies come first)
 // Returns an error if:
-// - Any task depends on a non-existent task
+// - DAG has not been built
 // - The graph contains a cycle
-func (e *Engine) Validate() error {
+func (e *Engine) TopologicalSort() ([]string, error) {
+	// Check if DAG has been built - need to check if indegree is initialized
+	if len(e.indegree) == 0 && len(e.tasks) > 0 {
+		return nil, fmt.Errorf("DAG not built - call Build() first")
+	}
+
 	// First, validate that all dependencies exist
 	for taskID, task := range e.tasks {
-		for _, depID := range task.DependsOn {
+		for _, depID := range task.dependsOn {
 			if _, exists := e.tasks[depID]; !exists {
-				return fmt.Errorf("task %s depends on non-existent task", taskID)
+				return nil, fmt.Errorf("task %s depends on non-existent task", taskID)
 			}
 		}
 	}
 
-	// Perform topological sort using Kahn's algorithm to detect cycles
 	// Create a copy of indegree map to avoid modifying the original
 	indegreeCopy := make(map[string]int)
 	for taskID, count := range e.indegree {
@@ -179,13 +185,15 @@ func (e *Engine) Validate() error {
 		}
 	}
 
+	// Result slice for topological order
+	result := make([]string, 0)
+
 	// Process tasks in topological order
-	processed := 0
 	for len(queue) > 0 {
 		// Dequeue a task
 		current := queue[0]
 		queue = queue[1:]
-		processed++
+		result = append(result, current)
 
 		// For each dependent of the current task
 		for _, dependent := range e.adj[current] {
@@ -200,7 +208,7 @@ func (e *Engine) Validate() error {
 	}
 
 	// If we didn't process all tasks, there's a cycle
-	if processed != len(e.tasks) {
+	if len(result) != len(e.tasks) {
 		// Collect tasks involved in the cycle
 		cycleTaskIDs := make([]string, 0)
 		for taskID, count := range indegreeCopy {
@@ -209,10 +217,10 @@ func (e *Engine) Validate() error {
 			}
 		}
 
-		return fmt.Errorf("cyclic dependency detected involving tasks: %v", cycleTaskIDs)
+		return nil, fmt.Errorf("cyclic dependency detected involving tasks: %v", cycleTaskIDs)
 	}
 
-	return nil
+	return result, nil
 }
 
 // executionState holds the runtime state for a single DAG execution
@@ -228,9 +236,6 @@ type executionState struct {
 func (e *Engine) Execute(ctx context.Context) (*ExecutionResult, error) {
 	// Generate unique ExecutionID using timestamp-based approach
 	executionID := fmt.Sprintf("exec-%d", time.Now().UnixNano())
-
-	// Create new Datastore instance for this execution
-	store := newMemoryStore()
 
 	// Initialize pendingDeps map with atomic.Int32 for each task
 	pendingDeps := make(map[string]*atomic.Int32)
@@ -253,7 +258,7 @@ func (e *Engine) Execute(ctx context.Context) (*ExecutionResult, error) {
 	// Create execution state
 	state := &executionState{
 		executionID: executionID,
-		store:       store,
+		store:       e.store,
 		pendingDeps: pendingDeps,
 		readyQueue:  readyQueue,
 	}
@@ -351,7 +356,7 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState) *Ex
 				reportsMu.Unlock()
 
 				// Check if task failed and trigger Fail-Fast
-				if report.Status == TaskStatusFailed && e.ErrorStrategy == FailFast {
+				if report.Status == TaskStatusFailed && e.errorStrategy == FailFast {
 					// Mark execution as failed
 					executionFailed.Store(true)
 					// Cancel execution context to signal all other tasks
@@ -440,45 +445,34 @@ func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID
 	var cancel context.CancelFunc
 
 	// Apply task timeout if configured, otherwise use default timeout
-	if task.Timeout > 0 {
-		taskCtx, cancel = context.WithTimeout(execCtx, task.Timeout)
-	} else if e.DefaultTaskTimeout > 0 {
-		taskCtx, cancel = context.WithTimeout(execCtx, e.DefaultTaskTimeout)
+	if task.timeout > 0 {
+		taskCtx, cancel = context.WithTimeout(execCtx, task.timeout)
+	} else if e.defaultTaskTimeout > 0 {
+		taskCtx, cancel = context.WithTimeout(execCtx, e.defaultTaskTimeout)
 	} else {
 		// No timeout, but we still need a cancel function for cleanup
 		taskCtx, cancel = context.WithCancel(execCtx)
 	}
 	defer cancel()
 
-	// Create logger with task metadata
-	var taskLogger Logger
-	if e.logger != nil {
-		taskLogger = e.logger.With(
-			Field{Key: "TaskID", Value: taskID},
-			Field{Key: "ExecutionID", Value: executionID},
-		)
-	}
-
 	// Build handler chain: global middlewares + task middlewares + handler
-	handlers := make([]HandlerFunc, 0, len(e.middlewares)+len(task.Middlewares)+1)
+	handlers := make([]HandlerFunc, 0, len(e.middlewares)+len(task.middlewares)+1)
 	handlers = append(handlers, e.middlewares...)
-	handlers = append(handlers, task.Middlewares...)
-	handlers = append(handlers, task.Handler)
+	handlers = append(handlers, task.middlewares...)
+	handlers = append(handlers, task.handler)
 
 	// Create task Context
 	ctx := &Context{
-		ctx:         taskCtx,
-		TaskID:      taskID,
-		ExecutionID: executionID,
+		taskID:      taskID,
+		executionID: executionID,
 		StartTime:   startTime,
-		Store:       store,
-		Logger:      taskLogger,
+		store:       store,
 		handlers:    handlers,
 		index:       -1, // Start at -1 so first Next() call advances to 0
 	}
 
 	// Execute handler chain starting from index 0
-	err := ctx.Next()
+	err := ctx.Next(taskCtx)
 
 	// Record end time and duration
 	endTime := time.Now()

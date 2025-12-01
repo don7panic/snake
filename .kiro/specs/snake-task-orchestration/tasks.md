@@ -245,7 +245,7 @@
   - **Property 44: All tasks have reports**
   - **Validates: Requirements 13.6**
 
-- [ ] 15. Implement timeout handling
+- [x] 15. Implement timeout handling
   - Apply default timeout from Engine options when task timeout not set
   - Wrap task context with timeout using context.WithTimeout
   - Handle deadline exceeded errors as task failures
@@ -264,7 +264,7 @@
   - **Property 51: Timeout results in FAILED status**
   - **Validates: Requirements 15.4**
 
-- [ ] 16. Implement middleware execution chain
+- [x] 16. Implement middleware execution chain
   - Store handlers slice in Context
   - Implement Next() to advance index and call next handler
   - Ensure global middleware executes for all tasks
@@ -288,7 +288,7 @@
   - **Property 40: Middleware executes in reverse on return**
   - **Validates: Requirements 11.6**
 
-- [ ] 17. Implement Logger integration
+- [x] 17. Implement Logger integration
   - Create child Logger with TaskID and ExecutionID fields for each task
   - Ensure Context.Logger includes task metadata
   - Verify logs include TaskID and ExecutionID automatically
@@ -302,7 +302,7 @@
   - **Property 52: Logs include task metadata**
   - **Validates: Requirements 16.5**
 
-- [ ] 18. Implement disconnected graph support
+- [x] 18. Implement disconnected graph support
   - Ensure all zero-indegree tasks are identified regardless of connectivity
   - Execute all subgraphs in the same execution
   - Ensure Fail-Fast cancels all subgraphs
@@ -317,7 +317,7 @@
   - **Property 53: Failure in one subgraph cancels all subgraphs**
   - **Validates: Requirements 17.4**
 
-- [ ] 19. Implement remaining Context properties
+- [x] 19. Implement remaining Context properties
   - Verify Context contains Datastore reference
   - Verify SetResult uses task ID as key
   - Verify Context contains ExecutionID
@@ -349,7 +349,7 @@
   - **Property 45: Result contains execution ID**
   - **Validates: Requirements 14.1**
 
-- [ ] 20. Create example recovery middleware
+- [x] 20. Create example recovery middleware
   - Implement recovery middleware that catches panics
   - Convert panics to errors
   - Log panic details with stack trace

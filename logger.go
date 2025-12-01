@@ -29,6 +29,11 @@ func newDefaultLogger() *defaultLogger {
 	return &defaultLogger{}
 }
 
+// NewDefaultLogger creates a new default console logger (exported for public use)
+func NewDefaultLogger() Logger {
+	return &defaultLogger{}
+}
+
 // Info logs an informational message with the provided context and fields
 func (l *defaultLogger) Info(ctx context.Context, msg string, fields ...Field) {
 	// Combine existing fields with new fields
