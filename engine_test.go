@@ -8,6 +8,19 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestRegister_DisallowedAfterBuild(t *testing.T) {
+	engine := NewEngine()
+
+	task1 := NewTask("task1", func(c context.Context, ctx *Context) error { return nil })
+	task2 := NewTask("task2", func(c context.Context, ctx *Context) error { return nil })
+
+	assert.NoError(t, engine.Register(task1))
+	assert.NoError(t, engine.Build())
+
+	err := engine.Register(task2)
+	assert.ErrorIs(t, err, ErrRegisterAfterBuild)
+}
+
 // TestExecute_GeneratesUniqueExecutionID verifies that each execution gets a unique ID
 func TestExecute_GeneratesUniqueExecutionID(t *testing.T) {
 	newEngineWithTask := func() *Engine {

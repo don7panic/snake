@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ErrorStrategy defines how the engine handles task failures
@@ -53,12 +55,20 @@ func WithLogger(logger Logger) Option {
 	}
 }
 
+// WithMaxConcurrency limits concurrent task executions. Non-positive means unlimited.
+func WithMaxConcurrency(max int) Option {
+	return func(e *Engine) {
+		e.maxConcurrency = max
+	}
+}
+
 // Engine is the core orchestration component
 type Engine struct {
-	tasks       map[string]*Task
-	middlewares []HandlerFunc
-	store       Datastore
-	logger      Logger
+	tasks          map[string]*Task
+	middlewares    []HandlerFunc
+	store          Datastore
+	logger         Logger
+	maxConcurrency int
 
 	// DAG structure
 	adj      map[string][]string // adjacency list
@@ -109,6 +119,10 @@ func (e *Engine) Use(middleware ...HandlerFunc) {
 func (e *Engine) Register(tasks ...*Task) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+
+	if e.built {
+		return ErrRegisterAfterBuild
+	}
 
 	for _, task := range tasks {
 		// Validate non-empty ID
@@ -271,7 +285,7 @@ func (e *Engine) Execute(ctx context.Context) (*ExecutionResult, error) {
 	}
 
 	// Use a fresh store per execution
-	store := e.freshStore()
+	store := e.reset()
 
 	// Snapshot DAG data for safe concurrent Execute calls
 	e.mu.RLock()
@@ -293,8 +307,8 @@ func (e *Engine) Execute(ctx context.Context) (*ExecutionResult, error) {
 	topoSnapshot := append([]string(nil), e.topo...)
 	e.mu.RUnlock()
 
-	// Generate unique ExecutionID using timestamp-based approach
-	executionID := fmt.Sprintf("exec-%d", time.Now().UnixNano())
+	// Generate unique ExecutionID using UUID
+	executionID := uuid.New().String()
 
 	// Initialize pendingDeps map with atomic.Int32 for each task
 	pendingDeps := make(map[string]*atomic.Int32)
@@ -338,6 +352,11 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 	var wg sync.WaitGroup
 	reports := make(map[string]*TaskReport)
 	var reportsMu sync.Mutex
+
+	var sem chan struct{}
+	if e.maxConcurrency > 0 {
+		sem = make(chan struct{}, e.maxConcurrency)
+	}
 
 	// Track the number of tasks that have been scheduled
 	tasksScheduled := &atomic.Int32{}
@@ -397,9 +416,16 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 			// Increment WaitGroup for this task
 			wg.Add(1)
 
+			if sem != nil {
+				sem <- struct{}{}
+			}
+
 			// Spawn goroutine to execute task
 			go func(tid string) {
 				defer wg.Done()
+				if sem != nil {
+					defer func() { <-sem }()
+				}
 
 				// Execute the task
 				report := e.executeTask(execCtx, tid, state.executionID, state.store)
@@ -555,8 +581,8 @@ func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID
 	return report
 }
 
-// freshStore returns a clean Datastore for a new execution.
-func (e *Engine) freshStore() Datastore {
+// reset returns a clean Datastore for a new execution.
+func (e *Engine) reset() Datastore {
 	if e.store != nil {
 		return e.store.Init()
 	}

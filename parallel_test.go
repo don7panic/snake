@@ -2,7 +2,9 @@ package snake
 
 import (
 	"context"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -79,6 +81,40 @@ func TestParallelExecution_SimpleDependency(t *testing.T) {
 
 	// Verify execution order
 	assert.Equal(t, []string{"task1", "task2", "task3"}, executionOrder)
+}
+
+func TestParallelExecution_RespectsMaxConcurrency(t *testing.T) {
+	engine := NewEngine(WithMaxConcurrency(2))
+
+	var running int64
+	var maxSeen int64
+
+	handler := func(c context.Context, ctx *Context) error {
+		current := atomic.AddInt64(&running, 1)
+		for {
+			prev := atomic.LoadInt64(&maxSeen)
+			if current <= prev || atomic.CompareAndSwapInt64(&maxSeen, prev, current) {
+				break
+			}
+		}
+		time.Sleep(30 * time.Millisecond)
+		atomic.AddInt64(&running, -1)
+		return nil
+	}
+
+	for i := 1; i <= 4; i++ {
+		taskID := fmt.Sprintf("task%d", i)
+		task := &Task{
+			id:      taskID,
+			handler: handler,
+		}
+		assert.NoError(t, engine.Register(task))
+	}
+
+	result, err := engine.Execute(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.LessOrEqual(t, maxSeen, int64(2), "concurrent tasks should respect max concurrency")
 }
 
 // TestParallelExecution_ParallelTasks verifies independent tasks run concurrently
