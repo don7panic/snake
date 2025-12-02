@@ -12,7 +12,6 @@ import (
 )
 
 // TestRecoveryMiddleware_CatchesPanic tests that recovery middleware catches panics
-// and converts them to errors (Requirement 12.1, 12.2)
 func TestRecoveryMiddleware_CatchesPanic(t *testing.T) {
 	engine := snake.NewEngine()
 	engine.Use(RecoveryMiddleware())
@@ -23,9 +22,6 @@ func TestRecoveryMiddleware_CatchesPanic(t *testing.T) {
 	})
 
 	assert.NoError(t, engine.Register(task))
-	assert.NoError(t, engine.Build())
-	_, err := engine.TopologicalSort()
-	assert.NoError(t, err)
 
 	result, err := engine.Execute(context.Background())
 
@@ -44,7 +40,6 @@ func TestRecoveryMiddleware_CatchesPanic(t *testing.T) {
 }
 
 // TestRecoveryMiddleware_CatchesPanicWithError tests panic with error type
-// (Requirement 12.2)
 func TestRecoveryMiddleware_CatchesPanicWithError(t *testing.T) {
 	engine := snake.NewEngine()
 	engine.Use(RecoveryMiddleware())
@@ -55,9 +50,6 @@ func TestRecoveryMiddleware_CatchesPanicWithError(t *testing.T) {
 	})
 
 	assert.NoError(t, engine.Register(task))
-	engine.Build()
-	_, err := engine.TopologicalSort()
-	assert.NoError(t, err)
 
 	result, err := engine.Execute(context.Background())
 
@@ -70,7 +62,6 @@ func TestRecoveryMiddleware_CatchesPanicWithError(t *testing.T) {
 }
 
 // TestRecoveryMiddleware_FailFastOnPanic tests that panic triggers Fail-Fast
-// (Requirement 12.5)
 func TestRecoveryMiddleware_FailFastOnPanic(t *testing.T) {
 	engine := snake.NewEngine()
 	engine.Use(RecoveryMiddleware())
@@ -88,9 +79,6 @@ func TestRecoveryMiddleware_FailFastOnPanic(t *testing.T) {
 	}, snake.WithDependsOn("task2"))
 
 	assert.NoError(t, engine.Register(task1, task2, task3))
-	engine.Build()
-	_, err := engine.TopologicalSort()
-	assert.NoError(t, err)
 
 	result, err := engine.Execute(context.Background())
 
@@ -126,9 +114,6 @@ func TestRecoveryMiddleware_TaskSpecific(t *testing.T) {
 	)
 
 	assert.NoError(t, engine.Register(task1, task2))
-	engine.Build()
-	_, err := engine.TopologicalSort()
-	assert.NoError(t, err)
 
 	result, err := engine.Execute(context.Background())
 
@@ -155,9 +140,6 @@ func TestRecoveryMiddleware_NormalErrorPassthrough(t *testing.T) {
 	})
 
 	assert.NoError(t, engine.Register(task))
-	engine.Build()
-	_, err := engine.TopologicalSort()
-	assert.NoError(t, err)
 
 	result, err := engine.Execute(context.Background())
 
@@ -191,9 +173,6 @@ func TestRecoveryMiddleware_PanicWithDifferentTypes(t *testing.T) {
 			})
 
 			assert.NoError(t, engine.Register(task))
-			engine.Build()
-			_, err := engine.TopologicalSort()
-			assert.NoError(t, err)
 
 			result, err := engine.Execute(context.Background())
 
@@ -225,9 +204,6 @@ func TestRecoveryMiddleware_MiddlewareChain(t *testing.T) {
 	})
 
 	assert.NoError(t, engine.Register(task))
-	engine.Build()
-	_, err := engine.TopologicalSort()
-	assert.NoError(t, err)
 
 	result, err := engine.Execute(context.Background())
 

@@ -4,6 +4,7 @@ import "sync"
 
 // Datastore defines the interface for thread-safe key-value storage
 type Datastore interface {
+	Init() Datastore
 	Set(taskID string, value any)
 	Get(taskID string) (value any, ok bool)
 }
@@ -37,4 +38,9 @@ func (s *memoryMapStore) Get(taskID string) (any, bool) {
 	defer s.mu.RUnlock()
 	value, ok := s.data[taskID]
 	return value, ok
+}
+
+// Init returns a fresh datastore instance (or a reset version) for a new execution.
+func (s *memoryMapStore) Init() Datastore {
+	return newMemoryStore()
 }

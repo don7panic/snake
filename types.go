@@ -6,6 +6,7 @@ type ExecutionResult struct {
 	Success     bool
 	Reports     map[string]*TaskReport
 	Store       Datastore
+	TopoOrder   []string
 }
 
 // GetResult retrieves a specific task's output by Task ID from the Datastore

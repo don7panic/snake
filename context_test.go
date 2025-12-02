@@ -262,9 +262,6 @@ func TestContext_AllPropertiesIntegration(t *testing.T) {
 	err = engine.Register(task2)
 	assert.NoError(t, err)
 
-	err = engine.Build()
-	assert.NoError(t, err)
-
 	// Execute
 	result, err := engine.Execute(context.Background())
 	assert.NoError(t, err)

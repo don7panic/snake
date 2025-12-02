@@ -10,30 +10,29 @@ import (
 
 // TestExecute_GeneratesUniqueExecutionID verifies that each execution gets a unique ID
 func TestExecute_GeneratesUniqueExecutionID(t *testing.T) {
-	engine := NewEngine()
+	newEngineWithTask := func() *Engine {
+		e := NewEngine()
+		task := NewTask("task1", func(c context.Context, ctx *Context) error { return nil })
+		assert.NoError(t, e.Register(task))
+		assert.NoError(t, e.Build())
+		return e
+	}
 
-	// Register a simple task
-	task := NewTask("task1", func(c context.Context, ctx *Context) error { return nil })
-	err := engine.Register(task)
-	assert.NoError(t, err)
+	engine1 := newEngineWithTask()
+	engine2 := newEngineWithTask()
 
-	err = engine.Build()
-	assert.NoError(t, err)
-
-	// Execute twice and verify different ExecutionIDs
-	result1, err := engine.Execute(context.Background())
+	result1, err := engine1.Execute(context.Background())
 	assert.NoError(t, err)
 	assert.NotEmpty(t, result1.ExecutionID)
 
 	// Small delay to ensure different timestamp
 	time.Sleep(time.Millisecond)
 
-	result2, err := engine.Execute(context.Background())
+	result2, err := engine2.Execute(context.Background())
 	assert.NoError(t, err)
 	assert.NotEmpty(t, result2.ExecutionID)
 
-	// Verify ExecutionIDs are different
-	assert.NotEqual(t, result1.ExecutionID, result2.ExecutionID, "ExecutionIDs should be unique")
+	assert.NotEqual(t, result1.ExecutionID, result2.ExecutionID, "ExecutionIDs should be unique across executions")
 }
 
 // TestExecute_CreatesNewDatastore verifies that each execution gets a fresh Datastore
@@ -45,8 +44,7 @@ func TestExecute_CreatesNewDatastore(t *testing.T) {
 	err := engine.Register(task)
 	assert.NoError(t, err)
 
-	err = engine.Build()
-	assert.NoError(t, err)
+	assert.NoError(t, engine.Build())
 
 	// Execute and verify Datastore is empty
 	result, err := engine.Execute(context.Background())
@@ -56,39 +54,6 @@ func TestExecute_CreatesNewDatastore(t *testing.T) {
 	// Verify Datastore is empty (no tasks have run yet)
 	_, ok := result.Store.Get("task1")
 	assert.False(t, ok, "Datastore should be empty before tasks execute")
-}
-
-// TestExecute_InitializesPendingDeps verifies pending dependency counts match indegree
-func TestExecute_InitializesPendingDeps(t *testing.T) {
-	engine := NewEngine()
-
-	// Register tasks with dependencies
-	task1 := &Task{
-		id:      "task1",
-		handler: func(c context.Context, ctx *Context) error { return nil },
-	}
-	task2 := NewTask("task2", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task1"))
-	task3 := NewTask("task3", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task1", "task2"))
-
-	err := engine.Register(task1)
-	assert.NoError(t, err)
-	err = engine.Register(task2)
-	assert.NoError(t, err)
-	err = engine.Register(task3)
-	assert.NoError(t, err)
-
-	err = engine.Build()
-	assert.NoError(t, err)
-
-	// Verify indegree values
-	assert.Equal(t, 0, engine.indegree["task1"], "task1 should have indegree 0")
-	assert.Equal(t, 1, engine.indegree["task2"], "task2 should have indegree 1")
-	assert.Equal(t, 2, engine.indegree["task3"], "task3 should have indegree 2")
-
-	// Execute to initialize pending deps
-	result, err := engine.Execute(context.Background())
-	assert.NoError(t, err)
-	assert.NotNil(t, result)
 }
 
 // TestExecute_IdentifiesZeroIndegreeTasks verifies that tasks with no dependencies are identified
@@ -124,11 +89,6 @@ func TestExecute_IdentifiesZeroIndegreeTasks(t *testing.T) {
 	assert.Equal(t, 0, engine.indegree["task1"], "task1 should have indegree 0")
 	assert.Equal(t, 0, engine.indegree["task2"], "task2 should have indegree 0")
 	assert.Equal(t, 1, engine.indegree["task3"], "task3 should have indegree 1")
-
-	// Execute to verify zero-indegree tasks are identified
-	result, err := engine.Execute(context.Background())
-	assert.NoError(t, err)
-	assert.NotNil(t, result)
 }
 
 // TestExecute_DisconnectedGraphs verifies support for non-connected DAGs
@@ -163,12 +123,7 @@ func TestExecute_DisconnectedGraphs(t *testing.T) {
 	err = engine.Register(task4)
 	assert.NoError(t, err)
 
-	err = engine.Build()
-	assert.NoError(t, err)
-
-	// Verify both task1 and task3 have zero indegree
-	assert.Equal(t, 0, engine.indegree["task1"], "task1 should have indegree 0")
-	assert.Equal(t, 0, engine.indegree["task3"], "task3 should have indegree 0")
+	assert.NoError(t, engine.Build())
 
 	// Execute to verify both subgraphs are handled
 	result, err := engine.Execute(context.Background())
@@ -191,9 +146,6 @@ func TestExecuteTask_CreatesContext(t *testing.T) {
 	}
 
 	err := engine.Register(task)
-	assert.NoError(t, err)
-
-	err = engine.Build()
 	assert.NoError(t, err)
 
 	// Execute the task directly
@@ -231,9 +183,6 @@ func TestExecuteTask_AppliesTaskTimeout(t *testing.T) {
 	err := engine.Register(task)
 	assert.NoError(t, err)
 
-	err = engine.Build()
-	assert.NoError(t, err)
-
 	// Execute the task
 	store := newMemoryStore()
 	report := engine.executeTask(context.Background(), "task1", "exec-123", store)
@@ -264,9 +213,6 @@ func TestExecuteTask_AppliesDefaultTimeout(t *testing.T) {
 	}
 
 	err := engine.Register(task)
-	assert.NoError(t, err)
-
-	err = engine.Build()
 	assert.NoError(t, err)
 
 	// Execute the task
@@ -309,9 +255,6 @@ func TestExecuteTask_BuildsHandlerChain(t *testing.T) {
 	err := engine.Register(task)
 	assert.NoError(t, err)
 
-	err = engine.Build()
-	assert.NoError(t, err)
-
 	// Execute the task
 	store := newMemoryStore()
 	report := engine.executeTask(context.Background(), "task1", "exec-123", store)
@@ -345,9 +288,6 @@ func TestExecuteTask_RecordsSuccessStatus(t *testing.T) {
 	err := engine.Register(task)
 	assert.NoError(t, err)
 
-	err = engine.Build()
-	assert.NoError(t, err)
-
 	// Execute the task
 	store := newMemoryStore()
 	report := engine.executeTask(context.Background(), "task1", "exec-123", store)
@@ -375,9 +315,6 @@ func TestExecuteTask_RecordsFailureStatus(t *testing.T) {
 	}
 
 	err := engine.Register(task)
-	assert.NoError(t, err)
-
-	err = engine.Build()
 	assert.NoError(t, err)
 
 	// Execute the task
@@ -410,9 +347,6 @@ func TestExecuteTask_RecordsTiming(t *testing.T) {
 	err := engine.Register(task)
 	assert.NoError(t, err)
 
-	err = engine.Build()
-	assert.NoError(t, err)
-
 	// Execute the task
 	store := newMemoryStore()
 	report := engine.executeTask(context.Background(), "task1", "exec-123", store)
@@ -443,9 +377,6 @@ func TestExecuteTask_ContextInheritsExecutionContext(t *testing.T) {
 	}
 
 	err := engine.Register(task)
-	assert.NoError(t, err)
-
-	err = engine.Build()
 	assert.NoError(t, err)
 
 	// Execute the task
@@ -507,9 +438,6 @@ func TestExecuteTask_ContextProperties(t *testing.T) {
 	err := engine.Register(task)
 	assert.NoError(t, err)
 
-	err = engine.Build()
-	assert.NoError(t, err)
-
 	// Execute the task
 	store := newMemoryStore()
 	report := engine.executeTask(context.Background(), "task1", "exec-123", store)
@@ -561,9 +489,6 @@ func TestFailFast_MarksTaskAsFailed(t *testing.T) {
 	err := engine.Register(task1)
 	assert.NoError(t, err)
 
-	err = engine.Build()
-	assert.NoError(t, err)
-
 	// Execute
 	result, err := engine.Execute(context.Background())
 	assert.NoError(t, err)
@@ -608,9 +533,6 @@ func TestFailFast_CancelsExecutionContext(t *testing.T) {
 	err := engine.Register(task1)
 	assert.NoError(t, err)
 	err = engine.Register(task2)
-	assert.NoError(t, err)
-
-	err = engine.Build()
 	assert.NoError(t, err)
 
 	// Execute
@@ -673,9 +595,6 @@ func TestFailFast_MarksPendingTasksAsSkipped(t *testing.T) {
 	err = engine.Register(task3)
 	assert.NoError(t, err)
 
-	err = engine.Build()
-	assert.NoError(t, err)
-
 	// Execute
 	result, err := engine.Execute(context.Background())
 	assert.NoError(t, err)
@@ -730,9 +649,6 @@ func TestFailFast_ContinuesUntilActiveTasksComplete(t *testing.T) {
 	err := engine.Register(task1)
 	assert.NoError(t, err)
 	err = engine.Register(task2)
-	assert.NoError(t, err)
-
-	err = engine.Build()
 	assert.NoError(t, err)
 
 	// Execute
@@ -798,9 +714,6 @@ func TestFailFast_ExecutionResultContainsErrorDetails(t *testing.T) {
 	err = engine.Register(task2)
 	assert.NoError(t, err)
 
-	err = engine.Build()
-	assert.NoError(t, err)
-
 	// Execute
 	result, err := engine.Execute(context.Background())
 	assert.NoError(t, err)
@@ -860,9 +773,6 @@ func TestExecutionCompletion_AllTasksReachTerminalState(t *testing.T) {
 	err = engine.Register(task3)
 	assert.NoError(t, err)
 
-	err = engine.Build()
-	assert.NoError(t, err)
-
 	// Execute
 	result, err := engine.Execute(context.Background())
 	assert.NoError(t, err)
@@ -902,9 +812,6 @@ func TestExecutionResult_ContainsRequiredFields(t *testing.T) {
 	err := engine.Register(task1)
 	assert.NoError(t, err)
 	err = engine.Register(task2)
-	assert.NoError(t, err)
-
-	err = engine.Build()
 	assert.NoError(t, err)
 
 	// Execute
@@ -952,9 +859,6 @@ func TestExecutionResult_SuccessDetermination(t *testing.T) {
 		err = engine.Register(task2)
 		assert.NoError(t, err)
 
-		err = engine.Build()
-		assert.NoError(t, err)
-
 		result, err := engine.Execute(context.Background())
 		assert.NoError(t, err)
 		assert.True(t, result.Success, "Success should be true when all tasks succeed")
@@ -975,9 +879,6 @@ func TestExecutionResult_SuccessDetermination(t *testing.T) {
 		err := engine.Register(task1)
 		assert.NoError(t, err)
 		err = engine.Register(task2)
-		assert.NoError(t, err)
-
-		err = engine.Build()
 		assert.NoError(t, err)
 
 		result, err := engine.Execute(context.Background())
@@ -1001,9 +902,6 @@ func TestExecutionResult_SuccessDetermination(t *testing.T) {
 		err := engine.Register(task1)
 		assert.NoError(t, err)
 		err = engine.Register(task2)
-		assert.NoError(t, err)
-
-		err = engine.Build()
 		assert.NoError(t, err)
 
 		result, err := engine.Execute(context.Background())
@@ -1043,9 +941,6 @@ func TestExecutionResult_GetResult(t *testing.T) {
 	err := engine.Register(task1)
 	assert.NoError(t, err)
 	err = engine.Register(task2)
-	assert.NoError(t, err)
-
-	err = engine.Build()
 	assert.NoError(t, err)
 
 	// Execute
@@ -1090,9 +985,6 @@ func TestExecutionResult_DatastoreAccess(t *testing.T) {
 	err := engine.Register(task1)
 	assert.NoError(t, err)
 	err = engine.Register(task2)
-	assert.NoError(t, err)
-
-	err = engine.Build()
 	assert.NoError(t, err)
 
 	// Execute
@@ -1145,9 +1037,6 @@ func TestTimeout_TaskSpecificTimeout(t *testing.T) {
 	err = engine.Register(task2)
 	assert.NoError(t, err)
 
-	err = engine.Build()
-	assert.NoError(t, err)
-
 	// Execute
 	result, err := engine.Execute(context.Background())
 	assert.NoError(t, err)
@@ -1189,9 +1078,6 @@ func TestTimeout_DefaultTimeout(t *testing.T) {
 	err := engine.Register(task1)
 	assert.NoError(t, err)
 
-	err = engine.Build()
-	assert.NoError(t, err)
-
 	// Execute
 	result, err := engine.Execute(context.Background())
 	assert.NoError(t, err)
@@ -1226,9 +1112,6 @@ func TestTimeout_TaskTimeoutOverridesDefault(t *testing.T) {
 	}
 
 	err := engine.Register(task1)
-	assert.NoError(t, err)
-
-	err = engine.Build()
 	assert.NoError(t, err)
 
 	// Execute
@@ -1266,9 +1149,6 @@ func TestTimeout_NoTimeoutConfigured(t *testing.T) {
 	err := engine.Register(task1)
 	assert.NoError(t, err)
 
-	err = engine.Build()
-	assert.NoError(t, err)
-
 	// Execute
 	result, err := engine.Execute(context.Background())
 	assert.NoError(t, err)
@@ -1285,47 +1165,6 @@ func TestTimeout_NoTimeoutConfigured(t *testing.T) {
 	data, ok := result.GetResult("task1")
 	assert.True(t, ok)
 	assert.Equal(t, "completed", data)
-}
-
-// TestTopologicalSort_SimpleDependencies tests basic dependency ordering
-func TestTopologicalSort_SimpleDependencies(t *testing.T) {
-	engine := NewEngine()
-
-	// Create tasks: task1 -> task2 -> task3
-	task1 := NewTask("task1", func(c context.Context, ctx *Context) error { return nil })
-	task2WithDep := NewTask("task2", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task1"))
-	task3WithDep := NewTask("task3", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task2"))
-
-	err := engine.Register(task1, task2WithDep, task3WithDep)
-	assert.NoError(t, err)
-
-	err = engine.Build()
-	assert.NoError(t, err)
-
-	order, err := engine.TopologicalSort()
-	assert.NoError(t, err)
-	assert.Len(t, order, 3)
-
-	// Verify dependency order: task1 comes before task2, task2 comes before task3
-	task1Index := -1
-	task2Index := -1
-	task3Index := -1
-
-	for i, taskID := range order {
-		if taskID == "task1" {
-			task1Index = i
-		} else if taskID == "task2" {
-			task2Index = i
-		} else if taskID == "task3" {
-			task3Index = i
-		}
-	}
-
-	assert.NotEqual(t, -1, task1Index)
-	assert.NotEqual(t, -1, task2Index)
-	assert.NotEqual(t, -1, task3Index)
-	assert.True(t, task1Index < task2Index, "task1 should come before task2")
-	assert.True(t, task2Index < task3Index, "task2 should come before task3")
 }
 
 // TestTopologicalSort_ComplexDependencies tests complex dependency scenarios
@@ -1346,12 +1185,9 @@ func TestTopologicalSort_ComplexDependencies(t *testing.T) {
 	err := engine.Register(task1, task2, task3, task4)
 	assert.NoError(t, err)
 
-	err = engine.Build()
+	result, err := engine.Execute(context.Background())
 	assert.NoError(t, err)
-
-	order, err := engine.TopologicalSort()
-	assert.NoError(t, err)
-	assert.Len(t, order, 4)
+	assert.Len(t, result.TopoOrder, 4)
 
 	// Verify ordering constraints
 	task1Index := -1
@@ -1359,9 +1195,9 @@ func TestTopologicalSort_ComplexDependencies(t *testing.T) {
 	task3Index := -1
 	task4Index := -1
 
-	t.Log(order)
+	t.Log(result.TopoOrder)
 
-	for i, taskID := range order {
+	for i, taskID := range result.TopoOrder {
 		switch taskID {
 		case "task1":
 			task1Index = i
@@ -1392,16 +1228,13 @@ func TestTopologicalSort_DisconnectedGraphs(t *testing.T) {
 	err := engine.Register(taskA, taskB, taskC)
 	assert.NoError(t, err)
 
-	err = engine.Build()
+	result, err := engine.Execute(context.Background())
 	assert.NoError(t, err)
-
-	order, err := engine.TopologicalSort()
-	assert.NoError(t, err)
-	assert.Len(t, order, 3)
+	assert.Len(t, result.TopoOrder, 3)
 
 	// All tasks should be included
 	taskIDs := make(map[string]bool)
-	for _, taskID := range order {
+	for _, taskID := range result.TopoOrder {
 		taskIDs[taskID] = true
 	}
 	assert.True(t, taskIDs["taskA"])
@@ -1421,11 +1254,8 @@ func TestTopologicalSort_CycleDetection(t *testing.T) {
 	err := engine.Register(task1, task2, task3)
 	assert.NoError(t, err)
 
-	err = engine.Build()
-	assert.NoError(t, err)
-
 	// Should fail to sort due to cycle
-	_, err = engine.TopologicalSort()
+	_, err = engine.Execute(context.Background())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cyclic dependency detected")
 }

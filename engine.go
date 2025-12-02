@@ -63,11 +63,16 @@ type Engine struct {
 	// DAG structure
 	adj      map[string][]string // adjacency list
 	indegree map[string]int      // incoming edge count
+	topo     []string            // cached topological order
 
 	// options
 	errorStrategy      ErrorStrategy
 	globalTimeout      time.Duration
 	defaultTaskTimeout time.Duration
+
+	// concurrency control
+	mu    sync.RWMutex // protects DAG structures and task registry during Build/Execute
+	built bool
 }
 
 // NewEngine creates a new Engine with the provided options
@@ -102,6 +107,9 @@ func (e *Engine) Use(middleware ...HandlerFunc) {
 // - The task ID is already registered
 // - The task handler is nil
 func (e *Engine) Register(tasks ...*Task) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	for _, task := range tasks {
 		// Validate non-empty ID
 		if task.id == "" {
@@ -124,12 +132,19 @@ func (e *Engine) Register(tasks ...*Task) error {
 	return nil
 }
 
-// Build constructs the DAG structure from registered tasks
-// It builds the adjacency list and calculates indegree for each task
+// Build constructs and validates the DAG. Call this after all tasks are registered.
 func (e *Engine) Build() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.buildLocked()
+}
+
+// buildLocked constructs and validates the DAG. Caller must hold e.mu.Lock().
+func (e *Engine) buildLocked() error {
 	// Reset DAG structures
 	e.adj = make(map[string][]string)
 	e.indegree = make(map[string]int)
+	e.topo = nil
 
 	// Initialize indegree for all tasks to 0
 	for taskID := range e.tasks {
@@ -140,7 +155,9 @@ func (e *Engine) Build() error {
 	for taskID, task := range e.tasks {
 		// For each dependency of this task
 		for _, depID := range task.dependsOn {
-			// Add edge from dependency to this task in adjacency list
+			if _, exists := e.tasks[depID]; !exists {
+				return fmt.Errorf("%w: %s depends on %s", ErrMissingDependency, taskID, depID)
+			}
 			e.adj[depID] = append(e.adj[depID], taskID)
 
 			// Increment indegree for this task
@@ -148,36 +165,24 @@ func (e *Engine) Build() error {
 		}
 	}
 
+	// Topological sort with cycle detection
+	topo, err := e.topologicalSort()
+	if err != nil {
+		return err
+	}
+	e.topo = topo
+	e.built = true
+
 	return nil
 }
 
-// TopologicalSort performs a topological sort on the DAG using Kahn's algorithm
-// Returns tasks in dependency order (tasks with no dependencies come first)
-// Returns an error if:
-// - DAG has not been built
-// - The graph contains a cycle
-func (e *Engine) TopologicalSort() ([]string, error) {
-	// Check if DAG has been built - need to check if indegree is initialized
-	if len(e.indegree) == 0 && len(e.tasks) > 0 {
-		return nil, fmt.Errorf("DAG not built - call Build() first")
-	}
-
-	// First, validate that all dependencies exist
-	for taskID, task := range e.tasks {
-		for _, depID := range task.dependsOn {
-			if _, exists := e.tasks[depID]; !exists {
-				return nil, fmt.Errorf("task %s depends on non-existent task", taskID)
-			}
-		}
-	}
-
-	// Create a copy of indegree map to avoid modifying the original
+// topologicalSort performs a Kahn topological sort and returns the order or an error.
+func (e *Engine) topologicalSort() ([]string, error) {
 	indegreeCopy := make(map[string]int)
 	for taskID, count := range e.indegree {
 		indegreeCopy[taskID] = count
 	}
 
-	// Queue for tasks with zero indegree
 	queue := make([]string, 0)
 	for taskID, count := range indegreeCopy {
 		if count == 0 {
@@ -185,10 +190,12 @@ func (e *Engine) TopologicalSort() ([]string, error) {
 		}
 	}
 
-	// Result slice for topological order
-	result := make([]string, 0)
+	if len(queue) == 0 && len(indegreeCopy) > 0 {
+		return nil, fmt.Errorf("%w: no task with zero indegree", ErrCyclicDependency)
+	}
 
-	// Process tasks in topological order
+	result := make([]string, 0, len(indegreeCopy))
+
 	for len(queue) > 0 {
 		// Dequeue a task
 		current := queue[0]
@@ -216,8 +223,7 @@ func (e *Engine) TopologicalSort() ([]string, error) {
 				cycleTaskIDs = append(cycleTaskIDs, taskID)
 			}
 		}
-
-		return nil, fmt.Errorf("cyclic dependency detected involving tasks: %v", cycleTaskIDs)
+		return nil, fmt.Errorf("%w: %v", ErrCyclicDependency, cycleTaskIDs)
 	}
 
 	return result, nil
@@ -226,30 +232,83 @@ func (e *Engine) TopologicalSort() ([]string, error) {
 // executionState holds the runtime state for a single DAG execution
 type executionState struct {
 	executionID string
-	store       Datastore
 	pendingDeps map[string]*atomic.Int32
 	readyQueue  chan string
+	store       Datastore
+	taskIDs     []string
 }
 
 // Execute runs the DAG with the provided context
 // It initializes execution state and schedules tasks for parallel execution
 func (e *Engine) Execute(ctx context.Context) (*ExecutionResult, error) {
+	// Quick snapshot
+	e.mu.RLock()
+	hasTasks := len(e.tasks) > 0
+	built := e.built
+	e.mu.RUnlock()
+
+	if !hasTasks {
+		return nil, ErrNoTasksRegistered
+	}
+
+	// Lazily build if not already built
+	if !built {
+		e.mu.Lock()
+		if !e.built {
+			if err := e.buildLocked(); err != nil {
+				e.mu.Unlock()
+				return nil, err
+			}
+		}
+		e.mu.Unlock()
+	}
+
+	// Apply global timeout if configured
+	if e.globalTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, e.globalTimeout)
+		defer cancel()
+	}
+
+	// Use a fresh store per execution
+	store := e.freshStore()
+
+	// Snapshot DAG data for safe concurrent Execute calls
+	e.mu.RLock()
+	tasksCount := len(e.tasks)
+	taskIDs := make([]string, 0, tasksCount)
+	for id := range e.tasks {
+		taskIDs = append(taskIDs, id)
+	}
+	indegreeSnapshot := make(map[string]int, len(e.indegree))
+	for k, v := range e.indegree {
+		indegreeSnapshot[k] = v
+	}
+	adjSnapshot := make(map[string][]string, len(e.adj))
+	for k, v := range e.adj {
+		neighbors := make([]string, len(v))
+		copy(neighbors, v)
+		adjSnapshot[k] = neighbors
+	}
+	topoSnapshot := append([]string(nil), e.topo...)
+	e.mu.RUnlock()
+
 	// Generate unique ExecutionID using timestamp-based approach
 	executionID := fmt.Sprintf("exec-%d", time.Now().UnixNano())
 
 	// Initialize pendingDeps map with atomic.Int32 for each task
 	pendingDeps := make(map[string]*atomic.Int32)
-	for taskID, indegree := range e.indegree {
+	for taskID, indegree := range indegreeSnapshot {
 		counter := &atomic.Int32{}
 		counter.Store(int32(indegree))
 		pendingDeps[taskID] = counter
 	}
 
 	// Create ready queue channel
-	readyQueue := make(chan string, len(e.tasks))
+	readyQueue := make(chan string, tasksCount)
 
 	// Identify and queue all zero-indegree tasks
-	for taskID, indegree := range e.indegree {
+	for taskID, indegree := range indegreeSnapshot {
 		if indegree == 0 {
 			readyQueue <- taskID
 		}
@@ -258,20 +317,24 @@ func (e *Engine) Execute(ctx context.Context) (*ExecutionResult, error) {
 	// Create execution state
 	state := &executionState{
 		executionID: executionID,
-		store:       e.store,
 		pendingDeps: pendingDeps,
 		readyQueue:  readyQueue,
+		store:       store,
+		taskIDs:     taskIDs,
 	}
 
 	// Execute tasks in parallel
-	result := e.executeParallel(ctx, state)
+	result := e.executeParallel(ctx, state, adjSnapshot, indegreeSnapshot)
+
+	result.TopoOrder = topoSnapshot
+	result.Store = store
 
 	return result, nil
 }
 
 // executeParallel schedules and executes tasks in parallel based on their dependencies
 // It spawns a goroutine for each ready task and manages the execution lifecycle
-func (e *Engine) executeParallel(ctx context.Context, state *executionState) *ExecutionResult {
+func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj map[string][]string, indegree map[string]int) *ExecutionResult {
 	var wg sync.WaitGroup
 	reports := make(map[string]*TaskReport)
 	var reportsMu sync.Mutex
@@ -282,8 +345,8 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState) *Ex
 
 	// Count initial zero-indegree tasks
 	initialTasks := int32(0)
-	for _, indegree := range e.indegree {
-		if indegree == 0 {
+	for _, indegreeCount := range indegree {
+		if indegreeCount == 0 {
 			initialTasks++
 		}
 	}
@@ -295,10 +358,6 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState) *Ex
 
 	// Track if execution has failed
 	executionFailed := &atomic.Bool{}
-
-	// Track which tasks have been started
-	startedTasks := make(map[string]bool)
-	var startedMu sync.Mutex
 
 	// Spawn a goroutine to process tasks from the ready queue
 	done := make(chan struct{})
@@ -319,7 +378,7 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState) *Ex
 				reportsMu.Unlock()
 
 				// Still need to process dependents to allow completion
-				for _, dependentID := range e.adj[taskID] {
+				for _, dependentID := range adj[taskID] {
 					newCount := state.pendingDeps[dependentID].Add(-1)
 					if newCount == 0 {
 						tasksScheduled.Add(1)
@@ -334,11 +393,6 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState) *Ex
 				}
 				continue
 			}
-
-			// Mark task as started
-			startedMu.Lock()
-			startedTasks[taskID] = true
-			startedMu.Unlock()
 
 			// Increment WaitGroup for this task
 			wg.Add(1)
@@ -364,7 +418,7 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState) *Ex
 				}
 
 				// On task completion, process dependents
-				for _, dependentID := range e.adj[tid] {
+				for _, dependentID := range adj[tid] {
 					// Atomically decrement pendingDeps for this dependent
 					newCount := state.pendingDeps[dependentID].Add(-1)
 
@@ -394,7 +448,7 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState) *Ex
 
 	// Mark any tasks that were never started as SKIPPED
 	reportsMu.Lock()
-	for taskID := range e.tasks {
+	for _, taskID := range state.taskIDs {
 		if _, exists := reports[taskID]; !exists {
 			reports[taskID] = &TaskReport{
 				TaskID:    taskID,
@@ -481,11 +535,30 @@ func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID
 
 	// Update status based on execution result
 	if err != nil {
+		e.logger.Error(taskCtx, "task_failed", err,
+			Field{Key: "task_id", Value: taskID},
+			Field{Key: "execution_id", Value: executionID},
+			Field{Key: "duration_ms", Value: report.Duration.Milliseconds()},
+		)
 		report.Status = TaskStatusFailed
 		report.Err = err
-	} else {
-		report.Status = TaskStatusSuccess
+		return report
 	}
 
+	e.logger.Info(taskCtx, "task_succeeded",
+		Field{Key: "task_id", Value: taskID},
+		Field{Key: "execution_id", Value: executionID},
+		Field{Key: "duration_ms", Value: report.Duration.Milliseconds()},
+	)
+	report.Status = TaskStatusSuccess
+
 	return report
+}
+
+// freshStore returns a clean Datastore for a new execution.
+func (e *Engine) freshStore() Datastore {
+	if e.store != nil {
+		return e.store.Init()
+	}
+	return newMemoryStore()
 }

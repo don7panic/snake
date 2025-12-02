@@ -40,6 +40,7 @@ Engine 是 snake 的核心，负责：
    - 使用 原子操作维护 Task 的剩余依赖数（indegree），支持并发调度；
    - 为每个任务构造 任务级 Context 并执行 middleware + handler 链；
    - 维护每个任务的执行状态（成功、失败、跳过/未执行等）。
+   - `Build()` 为公开方法，推荐在并发 `Execute()` 前调用一次确认 DAG；`Execute()` 支持并发调用，每次基于 DAG 快照和独立的 Datastore 运行。
 
 4. 共享资源管理
    - 持有全局 Datastore 实例；
@@ -91,12 +92,11 @@ func NewEngine(opts ...Option) *Engine
 // 注册 task，要求 ID 唯一，重复注册返回错误。
 func (e *Engine) Register(task *Task) error
 
-// 构建并校验 DAG，通常在所有 Register 完成后调用一次。
-// 也可以在第一次 Execute 时懒构建。
-func (e *Engine) Build() error
-
 // 执行整个 DAG
 func (e *Engine) Execute(ctx context.Context) (*ExecutionResult, error)
+
+// Execute 会内部构建并校验 DAG，并返回拓扑序（TopoOrder）用于排障。
+// Engine 仅支持单次 Execute，不允许并发或重复执行同一实例。
 ```
 
 ---
@@ -143,9 +143,9 @@ type Task struct {
 3. 处理函数（Handler）
    - 签名统一为：
 
-     ```go
-     type HandlerFunc func(ctx *Context) error
-     ```
+    ```go
+    type HandlerFunc func(c context.Context, ctx *Context) error
+    ```
 
    - Handler 负责：
      - 通过 Context 读取依赖数据；
@@ -186,6 +186,7 @@ Datastore 是 任务间数据流转的载体，负责：
   - 写入时加写锁；
   - 读取时加读锁；
 - Datastore 实例是 全局唯一，由 Engine 持有；
+- 每次 `Execute` 时都会使用一份干净的 Datastore（通过 `Init()` 提供新实例），避免跨执行串数据；
 - 各任务 Context 的 `Datastore` 字段只是指向同一份底层实现的引用；
 - 提供基础接口示例：
 
@@ -193,6 +194,8 @@ Datastore 是 任务间数据流转的载体，负责：
   type Datastore interface {
       Set(taskID string, value any)
       Get(taskID string) (value any, ok bool)
+      // 为新一次执行提供干净的存储
+      Init() Datastore
   }
   ```
 
@@ -225,6 +228,7 @@ Context 表示 某个 Task 在某次 Engine.Execute 调用中的一次执行上�
    - 表示这次编排执行的整体生命周期；
    - 用于全局超时 / cancel 控制；
    - 在内部被传播到各个 Task 的 Context（作为父 context）。
+   - 每个 Engine 实例仅允许调用一次 `Execute`，不支持并发或重复执行。
 
 2. 任务级 Context（snake 自己的 Context 结构）
 
@@ -296,7 +300,7 @@ snake 的 Middleware 模型直接借鉴 gin：
 - 统一签名：
 
   ```go
-  type HandlerFunc func(ctx *Context) error
+  type HandlerFunc func(c context.Context, ctx *Context) error
   ```
 
 - 执行链模型：
@@ -329,7 +333,7 @@ snake 的 Middleware 模型直接借鉴 gin：
    - 用户通过 Engine 提供的注册接口，传入 Task 定义（ID、依赖、handler 等）；
    - 若 TaskID 冲突或依赖未注册，`Register` 或后续 `Build` 返回错误。
 
-2. 构建图
+2. 构建图（由 Execute 内部完成）
    - Engine 将 Task ID 作为节点；
    - 根据 Task 的依赖列表添加有向边 `dep -> task`；
    - 构建内部结构，例如：
@@ -421,6 +425,9 @@ snake 的 Middleware 模型直接借鉴 gin：
 
       // 便捷方法：获取某个 Task 的结果
       Store       Datastore
+
+      // 拓扑序，便于排障和可视化
+      TopoOrder   []string
   }
   ```
 

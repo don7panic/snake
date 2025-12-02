@@ -50,14 +50,8 @@ func DemoRecoveryMiddleware() {
 		return
 	}
 
-	// Build and validate the DAG
 	if err := engine.Build(); err != nil {
 		fmt.Printf("Failed to build DAG: %v\n", err)
-		return
-	}
-
-	if _, err := engine.TopologicalSort(); err != nil {
-		fmt.Printf("DAG validation failed: %v\n", err)
 		return
 	}
 
@@ -122,9 +116,7 @@ func DemoTaskSpecificRecovery() {
 		return
 	}
 
-	// Build DAG
-	err = engine.Build()
-	if err != nil {
+	if err := engine.Build(); err != nil {
 		fmt.Printf("Failed to build DAG: %v\n", err)
 		return
 	}
@@ -170,8 +162,7 @@ func DemoRecoveryWithTimeout() {
 		return
 	}
 
-	err = engine.Build()
-	if err != nil {
+	if err := engine.Build(); err != nil {
 		fmt.Printf("Failed to build DAG: %v\n", err)
 		return
 	}

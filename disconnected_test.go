@@ -82,13 +82,13 @@ func TestDisconnectedGraph_AllZeroIndegreeTasksIdentified(t *testing.T) {
 		},
 	}
 
+	var err error
 	for _, task := range tasks {
-		err := engine.Register(task)
+		err = engine.Register(task)
 		assert.NoError(t, err)
 	}
 
-	err := engine.Build()
-	assert.NoError(t, err)
+	assert.NoError(t, engine.Build())
 
 	// Verify zero-indegree tasks are identified
 	assert.Equal(t, 0, engine.indegree["task1"], "task1 should have indegree 0")
@@ -166,13 +166,11 @@ func TestDisconnectedGraph_AllSubgraphsExecuteInSameExecution(t *testing.T) {
 		},
 	}
 
+	var err error
 	for _, task := range tasks {
-		err := engine.Register(task)
+		err = engine.Register(task)
 		assert.NoError(t, err)
 	}
-
-	err := engine.Build()
-	assert.NoError(t, err)
 
 	// Execute
 	result, err := engine.Execute(context.Background())
@@ -269,13 +267,11 @@ func TestDisconnectedGraph_FailFastCancelsAllSubgraphs(t *testing.T) {
 		},
 	}
 
+	var err error
 	for _, task := range tasks {
-		err := engine.Register(task)
+		err = engine.Register(task)
 		assert.NoError(t, err)
 	}
-
-	err := engine.Build()
-	assert.NoError(t, err)
 
 	// Execute
 	result, err := engine.Execute(context.Background())
@@ -376,13 +372,11 @@ func TestDisconnectedGraph_AllTasksReachTerminalState(t *testing.T) {
 		},
 	}
 
+	var err error
 	for _, task := range tasks {
-		err := engine.Register(task)
+		err = engine.Register(task)
 		assert.NoError(t, err)
 	}
-
-	err := engine.Build()
-	assert.NoError(t, err)
 
 	// Execute
 	result, err := engine.Execute(context.Background())
@@ -469,13 +463,11 @@ func TestDisconnectedGraph_ZeroIndegreeTasksStartConcurrently(t *testing.T) {
 		},
 	}
 
+	var err error
 	for _, task := range tasks {
-		err := engine.Register(task)
+		err = engine.Register(task)
 		assert.NoError(t, err)
 	}
-
-	err := engine.Build()
-	assert.NoError(t, err)
 
 	// Execute
 	result, err := engine.Execute(context.Background())

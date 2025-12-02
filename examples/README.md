@@ -25,10 +25,15 @@ engine := snake.NewEngine()
 engine.Use(examples.RecoveryMiddleware())
 
 // All tasks will now have panic recovery
-task := snake.NewTask("my-task", func(ctx *snake.Context) error {
+task := snake.NewTask("my-task", func(c context.Context, ctx *snake.Context) error {
     panic("something went wrong!")
     return nil
 })
+
+// Validate DAG
+if err := engine.Build(); err != nil {
+    panic(err)
+}
 ```
 
 #### Task-Specific Application
@@ -40,12 +45,16 @@ engine := snake.NewEngine()
 
 // Only this task has panic recovery
 task := snake.NewTask("risky-task", 
-    func(ctx *snake.Context) error {
+    func(c context.Context, ctx *snake.Context) error {
         panic("risky operation failed")
         return nil
     },
     snake.WithMiddlewares(examples.RecoveryMiddleware()),
 )
+
+if err := engine.Build(); err != nil {
+    panic(err)
+}
 ```
 
 ### Behavior

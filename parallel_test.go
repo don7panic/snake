@@ -66,9 +66,6 @@ func TestParallelExecution_SimpleDependency(t *testing.T) {
 	err = engine.Register(task3)
 	assert.NoError(t, err)
 
-	err = engine.Build()
-	assert.NoError(t, err)
-
 	result, err := engine.Execute(context.Background())
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
@@ -92,6 +89,7 @@ func TestParallelExecution_ParallelTasks(t *testing.T) {
 	var mu sync.Mutex
 
 	// Create 3 independent tasks that sleep
+	var err error
 	for i := 1; i <= 3; i++ {
 		taskID := "task" + string(rune('0'+i))
 		task := &Task{
@@ -104,12 +102,9 @@ func TestParallelExecution_ParallelTasks(t *testing.T) {
 				return nil
 			},
 		}
-		err := engine.Register(task)
+		err = engine.Register(task)
 		assert.NoError(t, err)
 	}
-
-	err := engine.Build()
-	assert.NoError(t, err)
 
 	start := time.Now()
 	result, err := engine.Execute(context.Background())
@@ -212,13 +207,6 @@ func TestParallelExecution_DiamondDependency(t *testing.T) {
 	err = engine.Register(task4)
 	assert.NoError(t, err)
 
-	err = engine.Build()
-	assert.NoError(t, err)
-
-	res, err := engine.TopologicalSort()
-	assert.NoError(t, err)
-	t.Log(res)
-
 	result, err := engine.Execute(context.Background())
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
@@ -300,17 +288,6 @@ func TestParallelExecution_ComplexDAG(t *testing.T) {
 			},
 		},
 		{
-			id:        "task5",
-			dependsOn: []string{"task2"},
-			handler: func(c context.Context, ctx *Context) error {
-				mu.Lock()
-				assert.True(t, completed["task2"])
-				completed["task5"] = true
-				mu.Unlock()
-				return nil
-			},
-		},
-		{
 			id:        "task6",
 			dependsOn: []string{"task3", "task4", "task5"},
 			handler: func(c context.Context, ctx *Context) error {
@@ -324,19 +301,24 @@ func TestParallelExecution_ComplexDAG(t *testing.T) {
 				return nil
 			},
 		},
+		{
+			id:        "task5",
+			dependsOn: []string{"task2"},
+			handler: func(c context.Context, ctx *Context) error {
+				mu.Lock()
+				assert.True(t, completed["task2"])
+				completed["task5"] = true
+				mu.Unlock()
+				return nil
+			},
+		},
 	}
 
+	var err error
 	for _, task := range tasks {
-		err := engine.Register(task)
+		err = engine.Register(task)
 		assert.NoError(t, err)
 	}
-
-	err := engine.Build()
-	assert.NoError(t, err)
-
-	res, err := engine.TopologicalSort()
-	assert.NoError(t, err)
-	t.Log(res)
 
 	result, err := engine.Execute(context.Background())
 	assert.NoError(t, err)
@@ -390,9 +372,6 @@ func TestParallelExecution_DisconnectedSubgraphs(t *testing.T) {
 		err := engine.Register(task)
 		assert.NoError(t, err)
 	}
-
-	err := engine.Build()
-	assert.NoError(t, err)
 
 	result, err := engine.Execute(context.Background())
 	assert.NoError(t, err)
