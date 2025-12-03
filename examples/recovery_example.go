@@ -20,7 +20,7 @@ func DemoRecoveryMiddleware() {
 	// Task 1: A normal task that succeeds
 	task1 := snake.NewTask("task1", func(c context.Context, ctx *snake.Context) error {
 		fmt.Printf("[%s] Task 1 executing normally\n", ctx.TaskID())
-		ctx.SetResult("task1 completed successfully")
+		ctx.SetResult("task1", "task1 completed successfully")
 		return nil
 	})
 
@@ -39,7 +39,7 @@ func DemoRecoveryMiddleware() {
 	// Task 4: A task that would run after task2, but will be skipped due to panic
 	task4 := snake.NewTask("task4", func(c context.Context, ctx *snake.Context) error {
 		fmt.Printf("[%s] Task 4 executing\n", ctx.TaskID())
-		ctx.SetResult("task4 completed")
+		ctx.SetResult("task4", "task4 completed")
 		return nil
 	}, snake.WithDependsOn("task2"))
 
@@ -88,7 +88,7 @@ func DemoTaskSpecificRecovery() {
 	// Task 1: Normal task without recovery middleware
 	task1 := snake.NewTask("safe-task", func(c context.Context, ctx *snake.Context) error {
 		fmt.Printf("[%s] Safe task executing\n", ctx.TaskID())
-		ctx.SetResult("safe task result")
+		ctx.SetResult("safe-task", "safe task result")
 		return nil
 	})
 

@@ -79,10 +79,10 @@ Engine 在创建时可以通过 options 注入配置，包括但不限于：
 
 ```go
 type Engine struct {
-    tasks     map[string]*Task
-    middlewares []HandlerFunc
-    store     Datastore
-    opts      Options
+    tasks        map[string]*Task
+    middlewares  []HandlerFunc
+    storeFactory DatastoreFactory
+    opts         Options
 }
 
 type Option func(*Options)
@@ -96,7 +96,7 @@ func (e *Engine) Register(task *Task) error
 func (e *Engine) Execute(ctx context.Context) (*ExecutionResult, error)
 
 // Execute 会内部构建并校验 DAG，并返回拓扑序（TopoOrder）用于排障。
-// Engine 仅支持单次 Execute，不允许并发或重复执行同一实例。
+// Engine 支持并发 Execute 调用，每次执行使用独立的 Datastore 实例。
 ```
 
 ---
@@ -185,8 +185,8 @@ Datastore 是 任务间数据流转的载体，负责：
 - Datastore 实现是：`map[string]any + sync.RWMutex`：
   - 写入时加写锁；
   - 读取时加读锁；
-- Datastore 实例是 全局唯一，由 Engine 持有；
-- 每次 `Execute` 时都会使用一份干净的 Datastore（通过 `Init()` 提供新实例），避免跨执行串数据；
+- Engine 通过 DatastoreFactory 创建 Datastore 实例；
+- 每次 `Execute` 时都会通过工厂创建一份全新的 Datastore，避免跨执行串数据；
 - 各任务 Context 的 `Datastore` 字段只是指向同一份底层实现的引用；
 - 提供基础接口示例：
 
@@ -194,9 +194,10 @@ Datastore 是 任务间数据流转的载体，负责：
   type Datastore interface {
       Set(taskID string, value any)
       Get(taskID string) (value any, ok bool)
-      // 为新一次执行提供干净的存储
-      Init() Datastore
   }
+
+  // DatastoreFactory 用于为每次执行创建新的 Datastore 实例
+  type DatastoreFactory func() Datastore
   ```
 
   MVP 中可以是简单实现：
@@ -263,17 +264,30 @@ Context 表示 某个 Task 在某次 Engine.Execute 调用中的一次执行上�
 ### 5.3 Context 与 Datastore 的关系
 
 - 每个任务级 Context 中都持有一个 Datastore 接口/视图的引用；
-- 这些引用底层都指向 同一个全局 Datastore 实现实例；
+- 这些引用底层都指向同一个执行级的 Datastore 实现实例；
+- Datastore 的 key 设计为开放的字符串空间：
+  - 默认主结果可直接用 TaskID 作为 key；
+  - 也可以自定义 key（如 `taskID:subKey`）存储多个结果；
+  - 不限制不同 Task 是否可以写同名 key，覆盖/共享语义由业务自控。
 - Task 通过 Context 操作 Datastore，例如：
 
   ```go
-  // 约定：任务的输出写到自己的 ID key 下
+  // 默认主结果：使用 TaskID 作为 key
   func (c *Context) SetResult(value any) {
       c.Store.Set(c.TaskID, value)
   }
 
   func (c *Context) GetResult(taskID string) (any, bool) {
       return c.Store.Get(taskID)
+  }
+
+  // 扩展：自定义 key 写/读多个结果（示意）
+  func (c *Context) SetResultWithKey(key string, value any) {
+      c.Store.Set(key, value)
+  }
+
+  func (c *Context) GetResultWithKey(key string) (any, bool) {
+      return c.Store.Get(key)
   }
   ```
 
@@ -383,10 +397,11 @@ snake 的 Middleware 模型直接借鉴 gin：
   type TaskStatus string
 
   const (
-      TaskStatusPending  TaskStatus = "PENDING"
-      TaskStatusSuccess TaskStatus = "SUCCESS"
-      TaskStatusFailed  TaskStatus = "FAILED"
-      TaskStatusSkipped TaskStatus = "SKIPPED" // 因上游失败或全局取消导致未执行
+      TaskStatusPending   TaskStatus = "PENDING"
+      TaskStatusSuccess   TaskStatus = "SUCCESS"
+      TaskStatusFailed    TaskStatus = "FAILED"
+      TaskStatusCancelled TaskStatus = "CANCELLED" // 因上游失败或全局取消导致未执行
+      TaskStatusSkipped   TaskStatus = "SKIPPED"   // 预留给业务主动跳过（未来扩展）
   )
   ```
 
@@ -485,7 +500,8 @@ snake 的 Middleware 模型直接借鉴 gin：
   - 在 Task 的 handler 返回一种特定「跳过错误」（如 `ErrSkipTask`），Engine 将当前 Task 标记为 Skipped，但不触发 Fail-Fast；
   - 根据 Task 状态模型，在下游 Task 中决定是否执行（例如某些 Task 只在上游 Success 时执行）。
 - 为了兼容未来扩展，本设计已经预留：
-  - TaskStatusSkipped；
+  - TaskStatusCancelled；
+  - TaskStatusSkipped（可选扩展保留位）。
   - 执行报告结构中携带状态与错误类型。
 
 ---

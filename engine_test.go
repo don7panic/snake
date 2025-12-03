@@ -560,7 +560,7 @@ func TestFailFast_CancelsExecutionContext(t *testing.T) {
 	assert.Equal(t, TaskStatusFailed, result.Reports["task1"].Status)
 
 	// Verify task2 received cancellation (if it started)
-	// Note: task2 might be SKIPPED if it never started, or FAILED if it was running
+	// Note: task2 might be CANCELLED if it never started, or FAILED if it was running
 	if result.Reports["task2"].Status == TaskStatusFailed {
 		// Task2 was running and received cancellation
 		select {
@@ -572,12 +572,12 @@ func TestFailFast_CancelsExecutionContext(t *testing.T) {
 	}
 }
 
-// TestFailFast_MarksPendingTasksAsSkipped verifies that unstarted tasks are marked SKIPPED
-func TestFailFast_MarksPendingTasksAsSkipped(t *testing.T) {
+// TestFailFast_MarksPendingTasksAsCancelled verifies that unstarted tasks are marked CANCELLED
+func TestFailFast_MarksPendingTasksAsCancelled(t *testing.T) {
 	engine := NewEngine(WithFailFast())
 
 	// Create a chain: task1 -> task2 -> task3
-	// task1 will fail, task2 and task3 should be skipped
+	// task1 will fail, task2 and task3 should be cancelled
 	task1 := &Task{
 		id: "task1",
 		handler: func(c context.Context, ctx *Context) error {
@@ -619,9 +619,9 @@ func TestFailFast_MarksPendingTasksAsSkipped(t *testing.T) {
 	// Verify task1 failed
 	assert.Equal(t, TaskStatusFailed, result.Reports["task1"].Status)
 
-	// Verify task2 and task3 are skipped (they depend on task1)
-	assert.Equal(t, TaskStatusSkipped, result.Reports["task2"].Status)
-	assert.Equal(t, TaskStatusSkipped, result.Reports["task3"].Status)
+	// Verify task2 and task3 are cancelled (they depend on task1)
+	assert.Equal(t, TaskStatusCancelled, result.Reports["task2"].Status)
+	assert.Equal(t, TaskStatusCancelled, result.Reports["task3"].Status)
 }
 
 // TestFailFast_ContinuesUntilActiveTasksComplete verifies that active tasks are allowed to complete
@@ -755,7 +755,7 @@ func TestExecutionCompletion_AllTasksReachTerminalState(t *testing.T) {
 		id: "task1",
 		handler: func(c context.Context, ctx *Context) error {
 			time.Sleep(20 * time.Millisecond)
-			ctx.SetResult("result1")
+			ctx.SetResult("task1", "result1")
 			return nil
 		},
 	}
@@ -764,7 +764,7 @@ func TestExecutionCompletion_AllTasksReachTerminalState(t *testing.T) {
 		id: "task2",
 		handler: func(c context.Context, ctx *Context) error {
 			time.Sleep(30 * time.Millisecond)
-			ctx.SetResult("result2")
+			ctx.SetResult("task2", "result2")
 			return nil
 		},
 	}
@@ -774,7 +774,7 @@ func TestExecutionCompletion_AllTasksReachTerminalState(t *testing.T) {
 		dependsOn: []string{"task1", "task2"},
 		handler: func(c context.Context, ctx *Context) error {
 			time.Sleep(10 * time.Millisecond)
-			ctx.SetResult("result3")
+			ctx.SetResult("task3", "result3")
 			return nil
 		},
 	}
@@ -808,7 +808,7 @@ func TestExecutionResult_ContainsRequiredFields(t *testing.T) {
 	task1 := &Task{
 		id: "task1",
 		handler: func(c context.Context, ctx *Context) error {
-			ctx.SetResult("data1")
+			ctx.SetResult("task1", "data1")
 			return nil
 		},
 	}
@@ -817,7 +817,7 @@ func TestExecutionResult_ContainsRequiredFields(t *testing.T) {
 		id:        "task2",
 		dependsOn: []string{"task1"},
 		handler: func(c context.Context, ctx *Context) error {
-			ctx.SetResult("data2")
+			ctx.SetResult("task2", "data2")
 			return nil
 		},
 	}
@@ -899,7 +899,7 @@ func TestExecutionResult_SuccessDetermination(t *testing.T) {
 		assert.False(t, result.Success, "Success should be false when any task fails")
 	})
 
-	t.Run("Failure when any task is skipped", func(t *testing.T) {
+	t.Run("Failure when any task is cancelled", func(t *testing.T) {
 		engine := NewEngine(WithFailFast())
 
 		task1 := &Task{
@@ -919,8 +919,8 @@ func TestExecutionResult_SuccessDetermination(t *testing.T) {
 
 		result, err := engine.Execute(context.Background())
 		assert.NoError(t, err)
-		assert.False(t, result.Success, "Success should be false when any task is skipped")
-		assert.Equal(t, TaskStatusSkipped, result.Reports["task2"].Status)
+		assert.False(t, result.Success, "Success should be false when any task is cancelled")
+		assert.Equal(t, TaskStatusCancelled, result.Reports["task2"].Status)
 	})
 }
 
@@ -931,7 +931,7 @@ func TestExecutionResult_GetResult(t *testing.T) {
 	task1 := &Task{
 		id: "task1",
 		handler: func(c context.Context, ctx *Context) error {
-			ctx.SetResult("task1-data")
+			ctx.SetResult("task1", "task1-data")
 			return nil
 		},
 	}
@@ -946,7 +946,7 @@ func TestExecutionResult_GetResult(t *testing.T) {
 			assert.Equal(t, "task1-data", data)
 
 			// Write task2's result
-			ctx.SetResult("task2-data")
+			ctx.SetResult("task2", "task2-data")
 			return nil
 		},
 	}
@@ -982,7 +982,7 @@ func TestExecutionResult_DatastoreAccess(t *testing.T) {
 	task1 := &Task{
 		id: "task1",
 		handler: func(c context.Context, ctx *Context) error {
-			ctx.SetResult(map[string]string{"key": "value1"})
+			ctx.SetResult("task1", map[string]string{"key": "value1"})
 			return nil
 		},
 	}
@@ -990,7 +990,7 @@ func TestExecutionResult_DatastoreAccess(t *testing.T) {
 	task2 := &Task{
 		id: "task2",
 		handler: func(c context.Context, ctx *Context) error {
-			ctx.SetResult([]int{1, 2, 3})
+			ctx.SetResult("task2", []int{1, 2, 3})
 			return nil
 		},
 	}
@@ -1036,7 +1036,7 @@ func TestTimeout_TaskSpecificTimeout(t *testing.T) {
 		},
 	}
 
-	// Task that depends on task1 (should be skipped due to Fail-Fast)
+	// Task that depends on task1 (should be cancelled due to Fail-Fast)
 	task2 := &Task{
 		id:        "task2",
 		dependsOn: []string{"task1"},
@@ -1063,8 +1063,8 @@ func TestTimeout_TaskSpecificTimeout(t *testing.T) {
 	assert.NotNil(t, result.Reports["task1"].Err)
 	assert.ErrorIs(t, result.Reports["task1"].Err, context.DeadlineExceeded)
 
-	// Verify task2 was skipped
-	assert.Equal(t, TaskStatusSkipped, result.Reports["task2"].Status)
+	// Verify task2 was cancelled
+	assert.Equal(t, TaskStatusCancelled, result.Reports["task2"].Status)
 }
 
 // TestTimeout_DefaultTimeout verifies default timeout in full execution
@@ -1154,7 +1154,7 @@ func TestTimeout_NoTimeoutConfigured(t *testing.T) {
 		handler: func(c context.Context, ctx *Context) error {
 			// Sleep for a bit - should complete successfully
 			time.Sleep(20 * time.Millisecond)
-			ctx.SetResult("completed")
+			ctx.SetResult("task1", "completed")
 			return nil
 		},
 	}

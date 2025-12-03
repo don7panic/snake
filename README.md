@@ -5,9 +5,9 @@
 ## 特性
 
 - 显式依赖建模：用 TaskID 声明上下游关系，Engine 自动拓扑调度并并行执行。
-- 数据共享：内置并发安全的 Datastore，任务用 `ctx.SetResult`/`ctx.GetResult` 读写数据。
+- 数据共享：内置并发安全的 Datastore，任务用 `ctx.SetResult`/`ctx.GetResult` 读写数据；key 可用 TaskID（默认）或自定义字符串，方便一个任务写多个结果，甚至跨任务共享同名 key（需业务自控覆盖语义）。
 - 中间件链：与 gin 类似的 `HandlerFunc` 链，支持全局和任务级中间件。
-- 超时与 Fail-Fast：全局超时（`WithGlobalTimeout`）和任务级/默认超时；任务失败触发 Fail-Fast。
+- 超时与 Fail-Fast：全局超时（`WithGlobalTimeout`）和任务级/默认超时；任务失败触发 Fail-Fast（未开始的任务标记为 `CANCELLED`）。
 - 排障友好：`ExecutionResult` 返回任务报告与拓扑序 `TopoOrder`，便于检查执行顺序。
 - 单实例单次执行：一个 Engine 只允许调用一次 `Execute`（不可并发/重复）。
 
@@ -38,11 +38,14 @@ func main() {
     })
 
     a := snake.NewTask("A", func(c context.Context, ctx *snake.Context) error {
-        ctx.SetResult("a-value")
+        // 默认 key（TaskID）或自定义 key 存多个结果（示意）
+        ctx.SetResult("a-value")                 // 默认主结果
+        ctx.SetResultWithKey("A:detail", 123)    // 自定义 key（假设已启用扩展 API）
         return nil
     })
     b := snake.NewTask("B", func(c context.Context, ctx *snake.Context) error {
-        v, _ := ctx.GetResult("A")
+        v, _ := ctx.GetResult("A")                        // 读主结果
+        detail, _ := ctx.GetResultWithKey("A:detail")     // 读自定义 key（示意）
         ctx.SetResult(fmt.Sprintf("b got %v", v))
         return nil
     }, snake.WithDependsOn("A"))
@@ -79,8 +82,8 @@ func main() {
 ## 运行与限制
 
 - 推荐在并发 `Execute` 前调用一次 `Build` 做依赖/环校验；`Execute` 可并发调用，每次使用 DAG 快照和独立的 Datastore。
-- 每次执行都会使用干净的 Datastore；自定义 Datastore 需实现 `Init()` 返回新实例。
-- 遇到第一个任务失败（或超时）即触发 Fail-Fast，未开始的任务标记为 `SKIPPED`。
+- 每次执行都会通过 `DatastoreFactory` 创建全新的 Datastore 实例；可通过 `WithDatastoreFactory` 注入自定义工厂函数。
+- 遇到第一个任务失败（或超时）即触发 Fail-Fast，未开始的任务标记为 `CANCELLED`。
 
 ## 观察与排障
 

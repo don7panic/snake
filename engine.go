@@ -28,9 +28,11 @@ func WithFailFast() Option {
 	}
 }
 
-func WithStore(store Datastore) Option {
+// WithDatastoreFactory sets a custom datastore factory
+// The factory will be called for each execution to create a fresh Datastore instance
+func WithDatastoreFactory(factory DatastoreFactory) Option {
 	return func(e *Engine) {
-		e.store = store
+		e.storeFactory = factory
 	}
 }
 
@@ -66,7 +68,7 @@ func WithMaxConcurrency(max int) Option {
 type Engine struct {
 	tasks          map[string]*Task
 	middlewares    []HandlerFunc
-	store          Datastore
+	storeFactory   DatastoreFactory
 	logger         Logger
 	maxConcurrency int
 
@@ -89,9 +91,11 @@ type Engine struct {
 func NewEngine(opts ...Option) *Engine {
 	// Initialize with default options
 	e := &Engine{
-		tasks:         make(map[string]*Task),
-		middlewares:   make([]HandlerFunc, 0),
-		store:         newMemoryStore(),
+		tasks:       make(map[string]*Task),
+		middlewares: make([]HandlerFunc, 0),
+		storeFactory: func() Datastore {
+			return newMemoryStore()
+		},
 		logger:        newDefaultLogger(),
 		adj:           make(map[string][]string),
 		indegree:      make(map[string]int),
@@ -383,20 +387,18 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 	go func() {
 		defer close(done)
 		for taskID := range state.readyQueue {
-			// Check if execution has already failed
-			if executionFailed.Load() {
-				// Mark this task as SKIPPED since it hasn't started
+			if execCtx.Err() != nil || executionFailed.Load() {
 				reportsMu.Lock()
 				reports[taskID] = &TaskReport{
 					TaskID:    taskID,
-					Status:    TaskStatusSkipped,
+					Status:    TaskStatusCancelled,
+					Err:       execCtx.Err(),
 					StartTime: time.Now(),
 					EndTime:   time.Now(),
 					Duration:  0,
 				}
 				reportsMu.Unlock()
 
-				// Still need to process dependents to allow completion
 				for _, dependentID := range adj[taskID] {
 					newCount := state.pendingDeps[dependentID].Add(-1)
 					if newCount == 0 {
@@ -405,7 +407,6 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 					}
 				}
 
-				// Mark as completed
 				completed := tasksCompleted.Add(1)
 				if completed == tasksScheduled.Load() {
 					close(state.readyQueue)
@@ -472,13 +473,14 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 	// Wait for the processing goroutine to finish
 	<-done
 
-	// Mark any tasks that were never started as SKIPPED
+	// Mark any tasks that were never started as CANCELLED
 	reportsMu.Lock()
 	for _, taskID := range state.taskIDs {
 		if _, exists := reports[taskID]; !exists {
 			reports[taskID] = &TaskReport{
 				TaskID:    taskID,
-				Status:    TaskStatusSkipped,
+				Status:    TaskStatusCancelled,
+				Err:       execCtx.Err(),
 				StartTime: time.Now(),
 				EndTime:   time.Now(),
 				Duration:  0,
@@ -581,10 +583,7 @@ func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID
 	return report
 }
 
-// reset returns a clean Datastore for a new execution.
+// reset returns a clean Datastore for a new execution by calling the factory.
 func (e *Engine) reset() Datastore {
-	if e.store != nil {
-		return e.store.Init()
-	}
-	return newMemoryStore()
+	return e.storeFactory()
 }

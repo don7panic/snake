@@ -29,15 +29,15 @@ func (ctx *Context) Next(c context.Context) error {
 	return nil
 }
 
-// SetResult writes a value to the Datastore using the task's ID as the key
-func (ctx *Context) SetResult(value any) {
-	ctx.store.Set(ctx.taskID, value)
+// SetResult writes a value to the Datastore using the key
+func (ctx *Context) SetResult(key string, value any) {
+	ctx.store.Set(key, value)
 }
 
-// GetResult retrieves a value from the Datastore by task ID
+// GetResult retrieves a value from the Datastore by key
 // Returns the value and true if found, nil and false if not found
-func (ctx *Context) GetResult(taskID string) (any, bool) {
-	return ctx.store.Get(taskID)
+func (ctx *Context) GetResult(key string) (any, bool) {
+	return ctx.store.Get(key)
 }
 
 // TaskID returns the ID of the current task

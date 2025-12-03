@@ -9,7 +9,7 @@ type ExecutionResult struct {
 	TopoOrder   []string
 }
 
-// GetResult retrieves a specific task's output by Task ID from the Datastore
-func (r *ExecutionResult) GetResult(taskID string) (any, bool) {
-	return r.Store.Get(taskID)
+// GetResult retrieves a specific output by key from the Datastore
+func (r *ExecutionResult) GetResult(key string) (any, bool) {
+	return r.Store.Get(key)
 }

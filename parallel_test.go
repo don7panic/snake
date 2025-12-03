@@ -25,7 +25,7 @@ func TestParallelExecution_SimpleDependency(t *testing.T) {
 			mu.Lock()
 			executionOrder = append(executionOrder, "task1")
 			mu.Unlock()
-			ctx.SetResult("result1")
+			ctx.SetResult("task1", "result1")
 			return nil
 		},
 	}
@@ -41,7 +41,7 @@ func TestParallelExecution_SimpleDependency(t *testing.T) {
 			result, ok := ctx.GetResult("task1")
 			assert.True(t, ok)
 			assert.Equal(t, "result1", result)
-			ctx.SetResult("result2")
+			ctx.SetResult("task2", "result2")
 			return nil
 		},
 	}
@@ -187,7 +187,7 @@ func TestParallelExecution_DiamondDependency(t *testing.T) {
 			mu.Lock()
 			executionOrder = append(executionOrder, "task1")
 			mu.Unlock()
-			ctx.SetResult(1)
+			ctx.SetResult("task1", 1)
 			return nil
 		},
 	}
@@ -199,7 +199,7 @@ func TestParallelExecution_DiamondDependency(t *testing.T) {
 			mu.Lock()
 			executionOrder = append(executionOrder, "task2")
 			mu.Unlock()
-			ctx.SetResult(2)
+			ctx.SetResult("task2", 2)
 			return nil
 		},
 	}
@@ -211,7 +211,7 @@ func TestParallelExecution_DiamondDependency(t *testing.T) {
 			mu.Lock()
 			executionOrder = append(executionOrder, "task3")
 			mu.Unlock()
-			ctx.SetResult(3)
+			ctx.SetResult("task3", 3)
 			return nil
 		},
 	}

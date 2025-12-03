@@ -6,10 +6,11 @@ import "time"
 type TaskStatus string
 
 const (
-	TaskStatusPending TaskStatus = "PENDING"
-	TaskStatusSuccess TaskStatus = "SUCCESS"
-	TaskStatusFailed  TaskStatus = "FAILED"
-	TaskStatusSkipped TaskStatus = "SKIPPED"
+	TaskStatusPending   TaskStatus = "PENDING"
+	TaskStatusSuccess   TaskStatus = "SUCCESS"
+	TaskStatusFailed    TaskStatus = "FAILED"
+	TaskStatusSkipped   TaskStatus = "SKIPPED"
+	TaskStatusCancelled TaskStatus = "CANCELLED"
 )
 
 // Task represents a single executable unit in the workflow

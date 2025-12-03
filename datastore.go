@@ -4,10 +4,13 @@ import "sync"
 
 // Datastore defines the interface for thread-safe key-value storage
 type Datastore interface {
-	Init() Datastore
-	Set(taskID string, value any)
-	Get(taskID string) (value any, ok bool)
+	Set(key string, value any)
+	Get(key string) (value any, ok bool)
 }
+
+// DatastoreFactory is a function that creates new Datastore instances
+// Each execution will use a fresh instance created by this factory
+type DatastoreFactory func() Datastore
 
 // memoryMapStore is a thread-safe in-memory implementation of the Datastore interface
 type memoryMapStore struct {
@@ -22,25 +25,20 @@ func newMemoryStore() *memoryMapStore {
 	}
 }
 
-// Set stores a value in the datastore using the taskID as the key
+// Set stores a value in the datastore using the key as the key
 // This method is thread-safe and uses a write lock
-func (s *memoryMapStore) Set(taskID string, value any) {
+func (s *memoryMapStore) Set(key string, value any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.data[taskID] = value
+	s.data[key] = value
 }
 
-// Get retrieves a value from the datastore by taskID
+// Get retrieves a value from the datastore by key
 // Returns the value and true if found, nil and false if not found
 // This method is thread-safe and uses a read lock
-func (s *memoryMapStore) Get(taskID string) (any, bool) {
+func (s *memoryMapStore) Get(key string) (any, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	value, ok := s.data[taskID]
+	value, ok := s.data[key]
 	return value, ok
-}
-
-// Init returns a fresh datastore instance (or a reset version) for a new execution.
-func (s *memoryMapStore) Init() Datastore {
-	return newMemoryStore()
 }

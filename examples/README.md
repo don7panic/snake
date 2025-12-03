@@ -70,7 +70,7 @@ When a panic occurs:
    - Full stack trace
 4. The task is marked as FAILED
 5. In Fail-Fast mode, the execution is cancelled (same as any other task failure)
-6. Dependent tasks are marked as SKIPPED
+6. Dependent tasks are marked as CANCELLED
 
 ### Examples
 

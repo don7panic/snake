@@ -131,7 +131,7 @@ func TestDisconnectedGraph_AllSubgraphsExecuteInSameExecution(t *testing.T) {
 		{
 			id: "task1",
 			handler: func(c context.Context, ctx *Context) error {
-				ctx.SetResult("data1")
+				ctx.SetResult("task1", "data1")
 				return nil
 			},
 		},
@@ -142,14 +142,14 @@ func TestDisconnectedGraph_AllSubgraphsExecuteInSameExecution(t *testing.T) {
 				data, ok := ctx.GetResult("task1")
 				assert.True(t, ok)
 				assert.Equal(t, "data1", data)
-				ctx.SetResult("data2")
+				ctx.SetResult("task2", "data2")
 				return nil
 			},
 		},
 		{
 			id: "task3",
 			handler: func(c context.Context, ctx *Context) error {
-				ctx.SetResult("data3")
+				ctx.SetResult("task3", "data3")
 				return nil
 			},
 		},
@@ -160,7 +160,7 @@ func TestDisconnectedGraph_AllSubgraphsExecuteInSameExecution(t *testing.T) {
 				data, ok := ctx.GetResult("task3")
 				assert.True(t, ok)
 				assert.Equal(t, "data3", data)
-				ctx.SetResult("data4")
+				ctx.SetResult("task4", "data4")
 				return nil
 			},
 		},
@@ -240,7 +240,7 @@ func TestDisconnectedGraph_FailFastCancelsAllSubgraphs(t *testing.T) {
 				if c.Err() != nil {
 					return c.Err()
 				}
-				ctx.SetResult("data2")
+				ctx.SetResult("task2", "data2")
 				return nil
 			},
 		},
@@ -293,23 +293,23 @@ func TestDisconnectedGraph_FailFastCancelsAllSubgraphs(t *testing.T) {
 		t.Fatal("task1 should have started")
 	}
 
-	// Verify task3 was skipped (depends on task2, which may or may not have completed)
-	// If task2 didn't complete, task3 should be SKIPPED
+	// Verify task3 was cancelled (depends on task2, which may or may not have completed)
+	// If task2 didn't complete, task3 should be CANCELLED
 	// The key requirement is that all tasks reach a terminal state
-	assert.Contains(t, []TaskStatus{TaskStatusSkipped, TaskStatusFailed}, result.Reports["task3"].Status,
-		"task3 should be SKIPPED or FAILED")
+	assert.Contains(t, []TaskStatus{TaskStatusCancelled, TaskStatusFailed}, result.Reports["task3"].Status,
+		"task3 should be CANCELLED or FAILED")
 
 	// Verify all tasks have reports (all reached terminal state)
 	assert.Len(t, result.Reports, 4, "All tasks should have reports")
 	for taskID, report := range result.Reports {
 		assert.NotEmpty(t, report.Status, "Task %s should have a status", taskID)
-		assert.Contains(t, []TaskStatus{TaskStatusSuccess, TaskStatusFailed, TaskStatusSkipped}, report.Status,
+		assert.Contains(t, []TaskStatus{TaskStatusSuccess, TaskStatusFailed, TaskStatusCancelled}, report.Status,
 			"Task %s should have a valid terminal status", taskID)
 	}
 }
 
 // TestDisconnectedGraph_AllTasksReachTerminalState verifies that all tasks in all subgraphs
-// reach a terminal state (SUCCESS, FAILED, or SKIPPED)
+// reach a terminal state (SUCCESS, FAILED, or CANCELLED)
 func TestDisconnectedGraph_AllTasksReachTerminalState(t *testing.T) {
 	engine := NewEngine(WithFailFast())
 
@@ -390,7 +390,7 @@ func TestDisconnectedGraph_AllTasksReachTerminalState(t *testing.T) {
 	assert.Len(t, result.Reports, 6, "All tasks should have reports")
 
 	// Verify all tasks reached a terminal state
-	terminalStates := []TaskStatus{TaskStatusSuccess, TaskStatusFailed, TaskStatusSkipped}
+	terminalStates := []TaskStatus{TaskStatusSuccess, TaskStatusFailed, TaskStatusCancelled}
 	for taskID, report := range result.Reports {
 		assert.Contains(t, terminalStates, report.Status,
 			"Task %s should have a terminal status, got %s", taskID, report.Status)
@@ -401,9 +401,9 @@ func TestDisconnectedGraph_AllTasksReachTerminalState(t *testing.T) {
 	// Verify specific task states
 	assert.Equal(t, TaskStatusSuccess, result.Reports["task1"].Status, "task1 should succeed")
 	assert.Equal(t, TaskStatusFailed, result.Reports["task2"].Status, "task2 should fail")
-	assert.Equal(t, TaskStatusSkipped, result.Reports["task3"].Status, "task3 should be skipped")
+	assert.Equal(t, TaskStatusCancelled, result.Reports["task3"].Status, "task3 should be cancelled")
 
-	// task4, task5, task6 should either complete or be cancelled/skipped
+	// task4, task5, task6 should either complete or be cancelled
 	// The important thing is they all have terminal states
 	for _, taskID := range []string{"task4", "task5", "task6"} {
 		assert.Contains(t, terminalStates, result.Reports[taskID].Status,

@@ -20,7 +20,7 @@ func TestContext_SetResult(t *testing.T) {
 	}
 
 	// Test SetResult writes to correct key
-	ctx.SetResult("test-value")
+	ctx.SetResult("task1", "test-value")
 
 	// Verify the value was stored with the task's ID
 	value, ok := store.Get("task1")
@@ -145,8 +145,8 @@ func TestContext_SetResultUsesTaskID(t *testing.T) {
 	}
 
 	// Each task sets its result
-	ctx1.SetResult("result-from-task1")
-	ctx2.SetResult("result-from-task2")
+	ctx1.SetResult("task1", "result-from-task1")
+	ctx2.SetResult("task2", "result-from-task2")
 
 	// Verify results are stored under correct task IDs
 	value1, ok1 := store.Get("task1")
@@ -225,8 +225,7 @@ func TestContext_AllPropertiesIntegration(t *testing.T) {
 			task1StartTime = ctx.StartTime
 			task1Store = ctx.store
 
-			// SetResult should use task ID as key (Req 8.2)
-			ctx.SetResult("data-from-task1")
+			ctx.SetResult("task1", "data-from-task1")
 			return nil
 		},
 	}
@@ -252,7 +251,7 @@ func TestContext_AllPropertiesIntegration(t *testing.T) {
 			assert.Equal(t, "data-from-task1", data, "Should get correct data from task1")
 
 			// SetResult should use task ID as key (Req 8.2)
-			ctx.SetResult("data-from-task2")
+			ctx.SetResult("task2", "data-from-task2")
 			return nil
 		},
 	}

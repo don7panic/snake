@@ -92,8 +92,8 @@ func TestRecoveryMiddleware_FailFastOnPanic(t *testing.T) {
 	assert.Equal(t, snake.TaskStatusFailed, result.Reports["task2"].Status)
 	assert.NotNil(t, result.Reports["task2"].Err)
 
-	// Task3 should be skipped due to Fail-Fast
-	assert.Equal(t, snake.TaskStatusSkipped, result.Reports["task3"].Status)
+	// Task3 should be cancelled due to Fail-Fast
+	assert.Equal(t, snake.TaskStatusCancelled, result.Reports["task3"].Status)
 }
 
 // TestRecoveryMiddleware_TaskSpecific tests recovery middleware on specific tasks
