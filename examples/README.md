@@ -2,6 +2,49 @@
 
 This directory contains example middleware implementations and usage demonstrations for the snake task orchestration framework.
 
+## End-to-End, Build-Once Workflow
+
+The `e2e` example (`examples/e2e`) shows how to:
+
+- Build a complex DAG once at service startup (order validation → profile lookup → inventory reservation → pricing → payment → persistence → notifications → response).
+- Reuse the built engine for every request by only calling `Execute` with request-scoped context.
+- Keep request data in `context.Context` while letting tasks exchange intermediate results through the shared datastore.
+- Add lightweight middleware to trace task timing without re-instantiating the engine.
+
+Quick usage:
+
+```go
+import (
+    "context"
+    "fmt"
+
+    "snake/examples/e2e"
+)
+
+func main() {
+    // Build once during bootstrap (thread-safe and cached).
+    if _, err := e2e.EnsureOrderEngine(); err != nil {
+        panic(err)
+    }
+
+    // Per-request execution reuses the same engine.
+    resp, result, err := e2e.ExecuteOrder(context.Background(), e2e.OrderRequest{
+        RequestID: "req-001",
+        UserID:    "vip-42",
+        Items: []e2e.OrderItem{
+            {SKU: "sku-1", Quantity: 2, UnitPrice: 99},
+        },
+        CouponCode: "new-user",
+    })
+    if err != nil {
+        panic(err)
+    }
+
+    fmt.Println("order:", resp.OrderID, "payment:", resp.PaymentID, "reservation:", resp.ReservationID)
+    fmt.Println("topo order:", result.TopoOrder)
+}
+```
+
 ## Recovery Middleware
 
 The recovery middleware catches panics in task handlers and converts them to errors, preventing the entire execution from crashing.

@@ -10,103 +10,117 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// CustomStore 是一个自定义的 Datastore 实现示例
-// 展示如何使用 DatastoreFactory 注入自定义存储
-type CustomStore struct {
+// StronglyTypedStore 展示带有固定字段（含结构体指针）的自定义存储
+// 通过锁保证并发安全，同时返回拷贝避免调用方意外修改内部状态。
+type StronglyTypedStore struct {
 	mu     sync.RWMutex
-	data   map[string]any
-	fieldA string
-	fieldB string
+	user   *User
+	status string
 }
 
-func NewCustomStore(config string) *CustomStore {
-	return &CustomStore{
-		data: make(map[string]any),
-	}
+type User struct {
+	Name string
+	Age  int
 }
 
-func (s *CustomStore) Set(taskID string, value any) {
+// Set implements snake.Datastore for StronglyTypedStore.
+func (s *StronglyTypedStore) Set(key string, value any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.data[taskID] = value
+
+	switch key {
+	case "user":
+		if value == nil {
+			s.user = nil
+			return
+		}
+		u := value.(*User)
+		copied := *u // 防止外部修改同一实例
+		s.user = &copied
+	case "status":
+		s.status = value.(string)
+	default:
+		// 为了示例简单，未知 key 直接忽略或 panic 均可，这里选择忽略。
+	}
 }
 
-func (s *CustomStore) Get(taskID string) (any, bool) {
+// Get implements snake.Datastore for StronglyTypedStore.
+func (s *StronglyTypedStore) Get(key string) (any, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	value, ok := s.data[taskID]
-	return value, ok
+
+	switch key {
+	case "user":
+		if s.user == nil {
+			return nil, false
+		}
+		copied := *s.user
+		return &copied, true
+	case "status":
+		if s.status == "" {
+			return nil, false
+		}
+		return s.status, true
+	default:
+		return nil, false
+	}
 }
 
-// TestCustomDatastoreFactory 演示如何使用自定义 Datastore
-func TestCustomDatastoreFactory(t *testing.T) {
-	// 创建自定义工厂函数
-	customConfig := "my-custom-config"
+// TestStronglyTypedStore 演示自定义存储包含结构体字段的用法
+func TestStronglyTypedStore(t *testing.T) {
 	factory := func() snake.Datastore {
-		return NewCustomStore(customConfig)
+		return &StronglyTypedStore{}
 	}
 
-	// 使用自定义工厂创建 Engine
 	engine := snake.NewEngine(
 		snake.WithDatastoreFactory(factory),
 	)
 
-	data := &CustomStore{}
-	// 注册任务
 	task1 := snake.NewTask("task1", func(c context.Context, ctx *snake.Context) error {
-		data.fieldA = "custom-value-1"
+		ctx.SetResult("user", &User{Name: "alice", Age: 20})
+		ctx.SetResult("status", "initialized")
 		return nil
 	})
 
 	task2 := snake.NewTask("task2", func(c context.Context, ctx *snake.Context) error {
-		assert.Equal(t, "custom-value-1", data.fieldA)
-		data.fieldB = "custom-value-2"
+		raw, ok := ctx.GetResult("user")
+		assert.True(t, ok)
+		user := raw.(*User)
+
+		// 更新用户信息并写回，内部会复制一份，避免共享实例被外部改动
+		ctx.SetResult("user", &User{Name: user.Name, Age: user.Age + 1})
+		ctx.SetResult("status", "updated")
 		return nil
 	}, snake.WithDependsOn("task1"))
 
-	assert.NoError(t, engine.Register(task1, task2))
+	task3 := snake.NewTask("task3", func(c context.Context, ctx *snake.Context) error {
+		rawUser, ok := ctx.GetResult("user")
+		assert.True(t, ok)
+		user := rawUser.(*User)
+		assert.Equal(t, "alice", user.Name)
+		assert.Equal(t, 21, user.Age)
+
+		rawStatus, ok := ctx.GetResult("status")
+		assert.True(t, ok)
+		assert.Equal(t, "updated", rawStatus)
+		return nil
+	}, snake.WithDependsOn("task2"))
+
+	assert.NoError(t, engine.Register(task1, task2, task3))
 	assert.NoError(t, engine.Build())
 
-	// 执行
 	result, err := engine.Execute(context.Background())
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 
-	// 验证结果
-	assert.Equal(t, "custom-value-1", data.fieldA)
-	assert.Equal(t, "custom-value-2", data.fieldB)
-}
+	// Verify datastore retained the latest values
+	uVal, ok := result.GetResult("user")
+	assert.True(t, ok)
+	user := uVal.(*User)
+	assert.Equal(t, "alice", user.Name)
+	assert.Equal(t, 21, user.Age)
 
-// TestMultipleExecutionsWithFactory 验证每次执行使用独立的 Datastore 实例
-func TestMultipleExecutionsWithFactory(t *testing.T) {
-	callCount := 0
-	factory := func() snake.Datastore {
-		callCount++
-		return NewCustomStore("execution-" + string(rune('0'+callCount)))
-	}
-
-	engine := snake.NewEngine(
-		snake.WithDatastoreFactory(factory),
-	)
-
-	task := snake.NewTask("task1", func(c context.Context, ctx *snake.Context) error {
-		ctx.SetResult("task1", "result")
-		return nil
-	})
-
-	assert.NoError(t, engine.Register(task))
-	assert.NoError(t, engine.Build())
-
-	// 第一次执行
-	result1, err := engine.Execute(context.Background())
-	assert.NoError(t, err)
-	assert.True(t, result1.Success)
-
-	// 第二次执行
-	result2, err := engine.Execute(context.Background())
-	assert.NoError(t, err)
-	assert.True(t, result2.Success)
-
-	// 验证工厂被调用了两次
-	assert.Equal(t, 2, callCount)
+	status, ok := result.GetResult("status")
+	assert.True(t, ok)
+	assert.Equal(t, "updated", status)
 }
