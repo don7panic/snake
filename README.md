@@ -5,11 +5,11 @@
 ## 特性
 
 - 显式依赖建模：用 TaskID 声明上下游关系，Engine 自动拓扑调度并并行执行。
-- 数据共享：内置并发安全的 Datastore，任务用 `ctx.SetResult`/`ctx.GetResult` 读写数据；key 可用 TaskID（默认）或自定义字符串，方便一个任务写多个结果，甚至跨任务共享同名 key（需业务自控覆盖语义）。
+- 数据共享：内置并发安全的 Datastore，任务用 `ctx.SetResult`/`ctx.GetResult` 读写数据；key 可用 TaskID 或自定义字符串，方便一个任务写多个结果，甚至跨任务共享同名 key（需业务自控覆盖语义）。
 - 中间件链：与 gin 类似的 `HandlerFunc` 链，支持全局和任务级中间件。
 - 超时与 Fail-Fast：全局超时（`WithGlobalTimeout`）和任务级/默认超时；任务失败触发 Fail-Fast（未开始的任务标记为 `CANCELLED`）。
 - 排障友好：`ExecutionResult` 返回任务报告与拓扑序 `TopoOrder`，便于检查执行顺序。
-- 单实例单次执行：一个 Engine 只允许调用一次 `Execute`（不可并发/重复）。
+- 可复用的 Engine：一次构建 DAG 后可多次、并发执行，每次 `Execute` 接受独立的输入参数。
 
 ## 快速开始
 
@@ -19,9 +19,15 @@ package main
 import (
     "context"
     "fmt"
+    "time"
 
     "snake"
 )
+
+// 定义输入类型
+type WorkflowInput struct {
+    Value string
+}
 
 func main() {
     engine := snake.NewEngine(
@@ -38,15 +44,22 @@ func main() {
     })
 
     a := snake.NewTask("A", func(c context.Context, ctx *snake.Context) error {
-        // 默认 key（TaskID）或自定义 key 存多个结果（示意）
-        ctx.SetResult("a-value")                 // 默认主结果
-        ctx.SetResultWithKey("A:detail", 123)    // 自定义 key（假设已启用扩展 API）
+        // 从 Context 获取输入参数（Input 为本次 Execute 的只读快照）
+        input, ok := ctx.Input().(*WorkflowInput)
+        if !ok {
+            return fmt.Errorf("invalid input type")
+        }
+
+        // 使用输入参数处理业务逻辑
+        result := fmt.Sprintf("processed: %s", input.Value)
+        ctx.SetResult("A", result)
         return nil
     })
+
     b := snake.NewTask("B", func(c context.Context, ctx *snake.Context) error {
-        v, _ := ctx.GetResult("A")                        // 读主结果
-        detail, _ := ctx.GetResultWithKey("A:detail")     // 读自定义 key（示意）
-        ctx.SetResult(fmt.Sprintf("b got %v", v))
+        // 读取上游任务结果
+        v, _ := ctx.GetResult("A")
+        ctx.SetResult("B", fmt.Sprintf("b got %v", v))
         return nil
     }, snake.WithDependsOn("A"))
 
@@ -59,7 +72,9 @@ func main() {
         panic(err)
     }
 
-    result, err := engine.Execute(context.Background())
+    // 执行时传入输入参数
+    input := &WorkflowInput{Value: "hello"}
+    result, err := engine.Execute(context.Background(), input)
     if err != nil {
         panic(err)
     }
@@ -70,6 +85,14 @@ func main() {
     if v, ok := result.GetResult("B"); ok {
         fmt.Println("B result:", v)
     }
+    
+    // Engine 可以用不同的输入多次执行
+    input2 := &WorkflowInput{Value: "world"}
+    result2, err := engine.Execute(context.Background(), input2)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println("second execution success:", result2.Success)
 }
 ```
 
@@ -82,7 +105,9 @@ func main() {
 ## 运行与限制
 
 - 推荐在并发 `Execute` 前调用一次 `Build` 做依赖/环校验；`Execute` 可并发调用，每次使用 DAG 快照和独立的 Datastore。
+- **新特性**：`Execute` 方法现在接受输入参数，允许同一个 Engine 用不同的输入多次执行。
 - 每次执行都会通过 `DatastoreFactory` 创建全新的 Datastore 实例；可通过 `WithDatastoreFactory` 注入自定义工厂函数。
+- Handler 通过 `ctx.Input()` 访问本次执行传入的输入参数（视为只读引用，避免在并行任务中原地修改），需要进行类型断言；如需变更请先拷贝。
 - 遇到第一个任务失败（或超时）即触发 Fail-Fast，未开始的任务标记为 `CANCELLED`。
 
 ## 观察与排障

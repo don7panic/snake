@@ -254,11 +254,12 @@ type executionState struct {
 	readyQueue  chan string
 	store       Datastore
 	taskIDs     []string
+	input       any
 }
 
-// Execute runs the DAG with the provided context
+// Execute runs the DAG with the provided context and input
 // It initializes execution state and schedules tasks for parallel execution
-func (e *Engine) Execute(ctx context.Context) (*ExecutionResult, error) {
+func (e *Engine) Execute(ctx context.Context, input any) (*ExecutionResult, error) {
 	// Quick snapshot
 	e.mu.RLock()
 	hasTasks := len(e.tasks) > 0
@@ -339,6 +340,7 @@ func (e *Engine) Execute(ctx context.Context) (*ExecutionResult, error) {
 		readyQueue:  readyQueue,
 		store:       store,
 		taskIDs:     taskIDs,
+		input:       input,
 	}
 
 	// Execute tasks in parallel
@@ -429,7 +431,7 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 				}
 
 				// Execute the task
-				report := e.executeTask(execCtx, tid, state.executionID, state.store)
+				report := e.executeTask(execCtx, tid, state.executionID, state.store, state.input)
 
 				// Store the report
 				reportsMu.Lock()
@@ -508,7 +510,7 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 
 // executeTask executes a single task with proper context, timeout, and middleware chain
 // It creates the task Context, applies timeouts, builds the handler chain, and records execution results
-func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID string, store Datastore) *TaskReport {
+func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID string, store Datastore, input any) *TaskReport {
 	// Get the task
 	task := e.tasks[taskID]
 
@@ -551,6 +553,7 @@ func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID
 		store:       store,
 		handlers:    handlers,
 		index:       -1, // Start at -1 so first Next() call advances to 0
+		input:       input,
 	}
 
 	// Execute handler chain starting from index 0

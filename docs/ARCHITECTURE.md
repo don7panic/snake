@@ -92,11 +92,15 @@ func NewEngine(opts ...Option) *Engine
 // 注册 task，要求 ID 唯一，重复注册返回错误。
 func (e *Engine) Register(task *Task) error
 
-// 执行整个 DAG
-func (e *Engine) Execute(ctx context.Context) (*ExecutionResult, error)
+// 构建并校验 DAG
+func (e *Engine) Build() error
 
-// Execute 会内部构建并校验 DAG，并返回拓扑序（TopoOrder）用于排障。
-// Engine 支持并发 Execute 调用，每次执行使用独立的 Datastore 实例。
+// 执行整个 DAG，接受输入参数
+func (e *Engine) Execute(ctx context.Context, input any) (*ExecutionResult, error)
+
+// Build 方法用于构建和校验 DAG，推荐在 Execute 前调用。
+// Execute 接受 input 参数，该参数会通过 Context.Input() 传递给所有 handler。
+// Engine 支持并发 Execute 调用，每次执行使用独立的 Datastore 实例和输入参数。
 ```
 
 ---
@@ -225,11 +229,11 @@ Context 表示 某个 Task 在某次 Engine.Execute 调用中的一次执行上�
 ### 5.2 Context 的层级区分
 
 1. 执行级（workflow 级）上下文
-   - 由用户传给 `Engine.Execute(ctx)` 中的 ctx；
+   - 由用户传给 `Engine.Execute(ctx, input)` 中的 ctx；
    - 表示这次编排执行的整体生命周期；
    - 用于全局超时 / cancel 控制；
    - 在内部被传播到各个 Task 的 Context（作为父 context）。
-   - 每个 Engine 实例仅允许调用一次 `Execute`，不支持并发或重复执行。
+   - Engine 支持多次 Execute 调用，每次可以传入不同的 input 参数。
 
 2. 任务级 Context（snake 自己的 Context 结构）
 
@@ -254,12 +258,21 @@ Context 表示 某个 Task 在某次 Engine.Execute 调用中的一次执行上�
        // 执行元数据
        ExecutionID string
        StartTime   time.Time
+       
+       // 执行输入参数
+       input    any
+   }
+   
+   // 获取执行输入参数
+   func (c *Context) Input() any {
+       return c.input
    }
    ```
 
    - 每个 Task 被调度执行时，Engine 为它 创建一个独立的 Context 实例；
    - 不在不同 Task 之间共享，避免并发写共享字段的问题；
-   - 执行级 `context.Context` 通常是加了 Task 级超时等的子上下文。
+   - 执行级 `context.Context` 通常是加了 Task 级超时等的子上下文；
+   - input 字段存储本次执行传入的输入参数，所有 handler 和中间件都可以通过 Input() 方法访问。
 
 ### 5.3 Context 与 Datastore 的关系
 
@@ -290,6 +303,31 @@ Context 表示 某个 Task 在某次 Engine.Execute 调用中的一次执行上�
       return c.Store.Get(key)
   }
   ```
+
+### 5.4 Context 与输入参数
+
+- Context 新增 `input` 字段，存储 Execute 时传入的输入参数；
+- Handler 和中间件通过 `ctx.Input()` 方法访问输入参数；
+- 输入参数的类型为 `any`，使用时需要进行类型断言；
+- 典型使用模式：
+
+  ```go
+  func handler(c context.Context, ctx *snake.Context) error {
+      // 获取并断言输入类型
+      input, ok := ctx.Input().(*MyInputType)
+      if !ok {
+          return fmt.Errorf("invalid input type")
+      }
+      
+      // 使用输入参数
+      result := processInput(input)
+      ctx.SetResult(result)
+      return nil
+  }
+  ```
+
+- 输入参数在每次执行中完全隔离，多个并发执行不会相互干扰；
+- 中间件也可以访问输入参数，用于日志记录、验证等场景。
 
 ---
 
@@ -506,16 +544,181 @@ snake 的 Middleware 模型直接借鉴 gin：
 
 ---
 
-## 10. 小结：四个核心概念的角色对齐
+## 10. Engine 与 Handler 参数分离设计
+
+### 10.1 设计动机
+
+在早期版本中，Engine 的构建与 Task handler 的参数耦合在一起。用户通常通过闭包捕获业务数据来实现 handler，这导致：
+
+1. **无法复用 Engine**：每次执行都需要重新构建 Engine 和 DAG；
+2. **构建与数据耦合**：Engine.Build() 依赖具体的业务数据；
+3. **并发执行困难**：闭包捕获的变量在并发场景下容易出现数据竞争。
+
+新设计通过引入执行时输入参数机制，实现了 Engine 构建与业务数据的完全分离。
+
+### 10.2 核心设计原则
+
+1. **构建时定义结构**
+   - Engine.Build() 只定义 DAG 结构，不涉及业务数据；
+   - Task 的依赖关系在构建时确定，与输入参数无关。
+
+2. **执行时注入参数**
+   - Engine.Execute(ctx, input) 接受输入参数；
+   - 输入参数通过 Context 传递给所有 handler 和中间件；Input 在各 Task 间是同一份引用，**约定只读**，并行任务若需修改请先拷贝。
+
+3. **类型安全访问**
+   - 输入参数类型为 `any`，提供最大灵活性；
+   - Handler 负责进行类型断言和验证；
+   - 建议在 handler 开始时统一进行类型检查。
+
+### 10.3 使用模式对比
+
+**旧模式：闭包捕获**
+
+```go
+func ProcessOrder(req *OrderRequest) error {
+    engine := snake.NewEngine()
+    
+    // Handler 通过闭包捕获 req
+    validate := snake.NewTask("validate", func(c context.Context, ctx *snake.Context) error {
+        return validateOrder(req)  // 闭包捕获
+    })
+    
+    process := snake.NewTask("process", func(c context.Context, ctx *snake.Context) error {
+        return processOrder(req)  // 闭包捕获
+    }, snake.WithDependsOn("validate"))
+    
+    engine.Register(validate, process)
+    engine.Build()
+    
+    return engine.Execute(context.Background(), req)
+}
+```
+
+**新模式：输入参数注入**
+
+```go
+var (
+    orderEngine     *snake.Engine
+    orderEngineOnce sync.Once
+)
+
+func initOrderEngine() {
+    orderEngineOnce.Do(func() {
+        orderEngine = snake.NewEngine()
+        
+        // Handler 从 Context 获取输入
+        validate := snake.NewTask("validate", func(c context.Context, ctx *snake.Context) error {
+            req := ctx.Input().(*OrderRequest)
+            return validateOrder(req)
+        })
+        
+        process := snake.NewTask("process", func(c context.Context, ctx *snake.Context) error {
+            req := ctx.Input().(*OrderRequest)
+            return processOrder(req)
+        }, snake.WithDependsOn("validate"))
+        
+        orderEngine.Register(validate, process)
+        orderEngine.Build()
+    })
+}
+
+func ProcessOrder(req *OrderRequest) error {
+    initOrderEngine()  // 只构建一次
+    
+    // 执行时传入参数
+    _, err := orderEngine.Execute(context.Background(), req)
+    return err
+}
+```
+
+### 10.4 输入参数的生命周期
+
+1. **传入阶段**
+   - 用户调用 `Execute(ctx, input)` 时传入；
+   - Engine 将 input 存储在 executionState 中。
+
+2. **传播阶段**
+   - Engine 为每个 Task 创建 Context 时，将 input 注入到 Context 中；
+   - 所有 Task 的 Context 都持有相同的 input 引用。
+
+3. **访问阶段**
+   - Handler 和中间件通过 `ctx.Input()` 访问；
+   - 需要进行类型断言以获取具体类型。
+
+4. **隔离保证**
+   - 每次 Execute 调用创建独立的 executionState；
+   - 不同执行之间的 input 完全隔离，无数据竞争。
+
+### 10.5 最佳实践
+
+1. **定义明确的输入类型**
+
+   ```go
+   type WorkflowInput struct {
+       UserID     string
+       OrderID    string
+       Parameters map[string]any
+   }
+   ```
+
+2. **统一的类型断言模式**
+
+   ```go
+   func handler(c context.Context, ctx *snake.Context) error {
+       input, ok := ctx.Input().(*WorkflowInput)
+       if !ok {
+           return fmt.Errorf("invalid input type: expected *WorkflowInput, got %T", ctx.Input())
+       }
+       
+       // 业务逻辑
+       return nil
+   }
+   ```
+
+3. **处理 nil 输入**
+
+   ```go
+   func handler(c context.Context, ctx *snake.Context) error {
+       input := ctx.Input()
+       if input == nil {
+           // 使用默认值或返回错误
+           return fmt.Errorf("input is required")
+       }
+       
+       // 类型断言和处理
+       return nil
+   }
+   ```
+
+4. **中间件访问输入**
+
+   ```go
+   func loggingMiddleware(c context.Context, ctx *snake.Context) error {
+       input := ctx.Input()
+       log.Printf("Task %s started with input: %+v", ctx.TaskID(), input)
+       
+       err := ctx.Next(c)
+       
+       log.Printf("Task %s completed with error: %v", ctx.TaskID(), err)
+       return err
+   }
+   ```
+
+---
+
+## 11. 小结：四个核心概念的角色对齐
 
 - Engine
   - 负责 DAG 构建与校验、任务调度与并发执行、全局资源管理（Datastore、Logger、中间件、配置）；
-  - 是 snake 的「编排中枢」。
+  - 是 snake 的「编排中枢」；
+  - 支持一次构建、多次执行，每次执行可以传入不同的输入参数。
 
 - Task
   - 代表 单个业务单元；
   - 显式声明依赖，决定 图结构与执行顺序；
-  - 在执行时，通过 Context 操作 Datastore，完成数据的生产和消费。
+  - 在执行时，通过 Context 操作 Datastore，完成数据的生产和消费；
+  - 通过 Context.Input() 访问执行时传入的输入参数。
 
 - Datastore
   - 负责 跨任务的数据传递与结果存储；
@@ -528,4 +731,5 @@ snake 的 Middleware 模型直接借鉴 gin：
     - Task 信息（ID / Name / Labels）；
     - Datastore 访问入口；
     - Logger / Tracer / Metrics 句柄；
+    - 执行输入参数访问（Input()）；
   - 是 middleware 和 handler 之间交互的统一载体。

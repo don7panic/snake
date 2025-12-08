@@ -2,6 +2,7 @@ package snake
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,14 +35,14 @@ func TestExecute_GeneratesUniqueExecutionID(t *testing.T) {
 	engine1 := newEngineWithTask()
 	engine2 := newEngineWithTask()
 
-	result1, err := engine1.Execute(context.Background())
+	result1, err := engine1.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, result1.ExecutionID)
 
 	// Small delay to ensure different timestamp
 	time.Sleep(time.Millisecond)
 
-	result2, err := engine2.Execute(context.Background())
+	result2, err := engine2.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, result2.ExecutionID)
 
@@ -60,7 +61,7 @@ func TestExecute_CreatesNewDatastore(t *testing.T) {
 	assert.NoError(t, engine.Build())
 
 	// Execute and verify Datastore is empty
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result.Store)
 
@@ -139,7 +140,7 @@ func TestExecute_DisconnectedGraphs(t *testing.T) {
 	assert.NoError(t, engine.Build())
 
 	// Execute to verify both subgraphs are handled
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 }
@@ -163,7 +164,7 @@ func TestExecuteTask_CreatesContext(t *testing.T) {
 
 	// Execute the task directly
 	store := newMemoryStore()
-	report := engine.executeTask(context.Background(), "task1", "exec-123", store)
+	report := engine.executeTask(context.Background(), "task1", "exec-123", store, nil)
 
 	// Verify report
 	assert.NotNil(t, report)
@@ -198,7 +199,7 @@ func TestExecuteTask_AppliesTaskTimeout(t *testing.T) {
 
 	// Execute the task
 	store := newMemoryStore()
-	report := engine.executeTask(context.Background(), "task1", "exec-123", store)
+	report := engine.executeTask(context.Background(), "task1", "exec-123", store, nil)
 
 	// Verify task failed due to timeout
 	assert.NotNil(t, report)
@@ -230,7 +231,7 @@ func TestExecuteTask_AppliesDefaultTimeout(t *testing.T) {
 
 	// Execute the task
 	store := newMemoryStore()
-	report := engine.executeTask(context.Background(), "task1", "exec-123", store)
+	report := engine.executeTask(context.Background(), "task1", "exec-123", store, nil)
 
 	// Verify task failed due to timeout
 	assert.NotNil(t, report)
@@ -270,7 +271,7 @@ func TestExecuteTask_BuildsHandlerChain(t *testing.T) {
 
 	// Execute the task
 	store := newMemoryStore()
-	report := engine.executeTask(context.Background(), "task1", "exec-123", store)
+	report := engine.executeTask(context.Background(), "task1", "exec-123", store, nil)
 
 	// Verify execution succeeded
 	assert.NotNil(t, report)
@@ -303,7 +304,7 @@ func TestExecuteTask_RecordsSuccessStatus(t *testing.T) {
 
 	// Execute the task
 	store := newMemoryStore()
-	report := engine.executeTask(context.Background(), "task1", "exec-123", store)
+	report := engine.executeTask(context.Background(), "task1", "exec-123", store, nil)
 
 	// Verify report
 	assert.NotNil(t, report)
@@ -332,7 +333,7 @@ func TestExecuteTask_RecordsFailureStatus(t *testing.T) {
 
 	// Execute the task
 	store := newMemoryStore()
-	report := engine.executeTask(context.Background(), "task1", "exec-123", store)
+	report := engine.executeTask(context.Background(), "task1", "exec-123", store, nil)
 
 	// Verify report
 	assert.NotNil(t, report)
@@ -362,7 +363,7 @@ func TestExecuteTask_RecordsTiming(t *testing.T) {
 
 	// Execute the task
 	store := newMemoryStore()
-	report := engine.executeTask(context.Background(), "task1", "exec-123", store)
+	report := engine.executeTask(context.Background(), "task1", "exec-123", store, nil)
 
 	// Verify timing
 	assert.NotNil(t, report)
@@ -394,7 +395,7 @@ func TestExecuteTask_ContextInheritsExecutionContext(t *testing.T) {
 
 	// Execute the task
 	store := newMemoryStore()
-	report := engine.executeTask(execCtx, "task1", "exec-123", store)
+	report := engine.executeTask(execCtx, "task1", "exec-123", store, nil)
 
 	// Verify task succeeded
 	assert.NotNil(t, report)
@@ -453,7 +454,7 @@ func TestExecuteTask_ContextProperties(t *testing.T) {
 
 	// Execute the task
 	store := newMemoryStore()
-	report := engine.executeTask(context.Background(), "task1", "exec-123", store)
+	report := engine.executeTask(context.Background(), "task1", "exec-123", store, nil)
 
 	// Verify task succeeded
 	assert.NotNil(t, report)
@@ -503,7 +504,7 @@ func TestFailFast_MarksTaskAsFailed(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -549,7 +550,7 @@ func TestFailFast_CancelsExecutionContext(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -609,7 +610,7 @@ func TestFailFast_MarksPendingTasksAsCancelled(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -665,7 +666,7 @@ func TestFailFast_ContinuesUntilActiveTasksComplete(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -728,7 +729,7 @@ func TestFailFast_ExecutionResultContainsErrorDetails(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -787,7 +788,7 @@ func TestExecutionCompletion_AllTasksReachTerminalState(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -828,7 +829,7 @@ func TestExecutionResult_ContainsRequiredFields(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -872,7 +873,7 @@ func TestExecutionResult_SuccessDetermination(t *testing.T) {
 		err = engine.Register(task2)
 		assert.NoError(t, err)
 
-		result, err := engine.Execute(context.Background())
+		result, err := engine.Execute(context.Background(), nil)
 		assert.NoError(t, err)
 		assert.True(t, result.Success, "Success should be true when all tasks succeed")
 	})
@@ -894,7 +895,7 @@ func TestExecutionResult_SuccessDetermination(t *testing.T) {
 		err = engine.Register(task2)
 		assert.NoError(t, err)
 
-		result, err := engine.Execute(context.Background())
+		result, err := engine.Execute(context.Background(), nil)
 		assert.NoError(t, err)
 		assert.False(t, result.Success, "Success should be false when any task fails")
 	})
@@ -917,7 +918,7 @@ func TestExecutionResult_SuccessDetermination(t *testing.T) {
 		err = engine.Register(task2)
 		assert.NoError(t, err)
 
-		result, err := engine.Execute(context.Background())
+		result, err := engine.Execute(context.Background(), nil)
 		assert.NoError(t, err)
 		assert.False(t, result.Success, "Success should be false when any task is cancelled")
 		assert.Equal(t, TaskStatusCancelled, result.Reports["task2"].Status)
@@ -957,7 +958,7 @@ func TestExecutionResult_GetResult(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -1001,7 +1002,7 @@ func TestExecutionResult_DatastoreAccess(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -1051,7 +1052,7 @@ func TestTimeout_TaskSpecificTimeout(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -1092,7 +1093,7 @@ func TestTimeout_DefaultTimeout(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -1128,7 +1129,7 @@ func TestTimeout_TaskTimeoutOverridesDefault(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -1163,7 +1164,7 @@ func TestTimeout_NoTimeoutConfigured(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -1198,7 +1199,7 @@ func TestTopologicalSort_ComplexDependencies(t *testing.T) {
 	err := engine.Register(task1, task2, task3, task4)
 	assert.NoError(t, err)
 
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.Len(t, result.TopoOrder, 4)
 
@@ -1241,7 +1242,7 @@ func TestTopologicalSort_DisconnectedGraphs(t *testing.T) {
 	err := engine.Register(taskA, taskB, taskC)
 	assert.NoError(t, err)
 
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.Len(t, result.TopoOrder, 3)
 
@@ -1268,7 +1269,121 @@ func TestTopologicalSort_CycleDetection(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Should fail to sort due to cycle
-	_, err = engine.Execute(context.Background())
+	_, err = engine.Execute(context.Background(), nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cyclic dependency detected")
+}
+
+// TestExecuteTask_InputAccessibility verifies that handlers can access input through Context.Input()
+func TestExecuteTask_InputAccessibility(t *testing.T) {
+	type OrderRequest struct {
+		UserID string
+		SKUID  string
+	}
+
+	engine := NewEngine()
+
+	// Create a task that accesses input
+	var capturedInput *OrderRequest
+	task := NewTask("task1", func(c context.Context, ctx *Context) error {
+		input, ok := ctx.Input().(*OrderRequest)
+		assert.True(t, ok, "Input should be of type *OrderRequest")
+		capturedInput = input
+		return nil
+	})
+
+	err := engine.Register(task)
+	assert.NoError(t, err)
+	assert.NoError(t, engine.Build())
+
+	// Execute with input
+	inputData := &OrderRequest{
+		UserID: "user123",
+		SKUID:  "sku456",
+	}
+	result, err := engine.Execute(context.Background(), inputData)
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+
+	// Verify the handler received the correct input
+	assert.NotNil(t, capturedInput)
+	assert.Equal(t, "user123", capturedInput.UserID)
+	assert.Equal(t, "sku456", capturedInput.SKUID)
+}
+
+// TestExecuteTask_InputAccessibilityMultipleTasks verifies that all tasks in a workflow can access input
+func TestExecuteTask_InputAccessibilityMultipleTasks(t *testing.T) {
+	type WorkflowInput struct {
+		Value int
+	}
+
+	engine := NewEngine()
+
+	// Track which tasks accessed the input
+	accessedTasks := make(map[string]int)
+	var mu sync.Mutex
+
+	task1 := NewTask("task1", func(c context.Context, ctx *Context) error {
+		input := ctx.Input().(*WorkflowInput)
+		mu.Lock()
+		accessedTasks["task1"] = input.Value
+		mu.Unlock()
+		return nil
+	})
+
+	task2 := NewTask("task2", func(c context.Context, ctx *Context) error {
+		input := ctx.Input().(*WorkflowInput)
+		mu.Lock()
+		accessedTasks["task2"] = input.Value
+		mu.Unlock()
+		return nil
+	}, WithDependsOn("task1"))
+
+	task3 := NewTask("task3", func(c context.Context, ctx *Context) error {
+		input := ctx.Input().(*WorkflowInput)
+		mu.Lock()
+		accessedTasks["task3"] = input.Value
+		mu.Unlock()
+		return nil
+	}, WithDependsOn("task2"))
+
+	err := engine.Register(task1, task2, task3)
+	assert.NoError(t, err)
+	assert.NoError(t, engine.Build())
+
+	// Execute with input
+	inputData := &WorkflowInput{Value: 42}
+	result, err := engine.Execute(context.Background(), inputData)
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+
+	// Verify all tasks received the correct input
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 42, accessedTasks["task1"])
+	assert.Equal(t, 42, accessedTasks["task2"])
+	assert.Equal(t, 42, accessedTasks["task3"])
+}
+
+// TestExecuteTask_NilInput verifies that handlers can handle nil input
+func TestExecuteTask_NilInput(t *testing.T) {
+	engine := NewEngine()
+
+	var capturedInput any
+	task := NewTask("task1", func(c context.Context, ctx *Context) error {
+		capturedInput = ctx.Input()
+		return nil
+	})
+
+	err := engine.Register(task)
+	assert.NoError(t, err)
+	assert.NoError(t, engine.Build())
+
+	// Execute with nil input
+	result, err := engine.Execute(context.Background(), nil)
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+
+	// Verify the handler received nil
+	assert.Nil(t, capturedInput)
 }

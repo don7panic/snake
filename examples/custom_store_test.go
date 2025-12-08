@@ -109,7 +109,7 @@ func TestStronglyTypedStore(t *testing.T) {
 	assert.NoError(t, engine.Register(task1, task2, task3))
 	assert.NoError(t, engine.Build())
 
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 

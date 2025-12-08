@@ -59,7 +59,7 @@ func DemoRecoveryMiddleware() {
 	fmt.Println("Engine will catch panics in any task and continue execution.")
 
 	// Execute the workflow
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	if err != nil {
 		fmt.Printf("Execution failed: %v\n", err)
 		return
@@ -125,7 +125,7 @@ func DemoTaskSpecificRecovery() {
 	fmt.Println("Only 'risky-task' has recovery middleware.")
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	if err != nil {
 		fmt.Printf("Execution failed: %v\n", err)
 		return
@@ -170,7 +170,7 @@ func DemoRecoveryWithTimeout() {
 	fmt.Println("=== Demo: Recovery with Timeouts ===")
 	fmt.Println("Demonstrating panic recovery in the context of timeouts.")
 
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	if err != nil {
 		fmt.Printf("Execution failed: %v\n", err)
 		return

@@ -68,7 +68,7 @@ func TestParallelExecution_SimpleDependency(t *testing.T) {
 	err = engine.Register(task3)
 	assert.NoError(t, err)
 
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.True(t, result.Success)
@@ -111,7 +111,7 @@ func TestParallelExecution_RespectsMaxConcurrency(t *testing.T) {
 		assert.NoError(t, engine.Register(task))
 	}
 
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.LessOrEqual(t, maxSeen, int64(2), "concurrent tasks should respect max concurrency")
@@ -143,7 +143,7 @@ func TestParallelExecution_ParallelTasks(t *testing.T) {
 	}
 
 	start := time.Now()
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	duration := time.Since(start)
 
 	assert.NoError(t, err)
@@ -243,7 +243,7 @@ func TestParallelExecution_DiamondDependency(t *testing.T) {
 	err = engine.Register(task4)
 	assert.NoError(t, err)
 
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.True(t, result.Success)
@@ -356,7 +356,7 @@ func TestParallelExecution_ComplexDAG(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.True(t, result.Success)
@@ -409,7 +409,7 @@ func TestParallelExecution_DisconnectedSubgraphs(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.True(t, result.Success)

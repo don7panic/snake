@@ -17,6 +17,7 @@ func TestContext_SetResult(t *testing.T) {
 		store:       store,
 		handlers:    nil,
 		index:       -1,
+		input:       nil,
 	}
 
 	// Test SetResult writes to correct key
@@ -40,6 +41,7 @@ func TestContext_GetResult(t *testing.T) {
 		store:       store,
 		handlers:    nil,
 		index:       -1,
+		input:       nil,
 	}
 
 	// Test GetResult reads from correct key
@@ -88,6 +90,7 @@ func TestContext_Next(t *testing.T) {
 		store:       store,
 		handlers:    []HandlerFunc{handler1, handler2, handler3},
 		index:       -1,
+		input:       nil,
 	}
 
 	// Execute the handler chain
@@ -113,6 +116,7 @@ func TestContext_Next_EmptyChain(t *testing.T) {
 		store:       newMemoryStore(),
 		handlers:    []HandlerFunc{},
 		index:       -1,
+		input:       nil,
 	}
 
 	// Calling Next on empty chain should not panic
@@ -132,6 +136,7 @@ func TestContext_SetResultUsesTaskID(t *testing.T) {
 		store:       store,
 		handlers:    nil,
 		index:       -1,
+		input:       nil,
 	}
 
 	// Create context for task2
@@ -142,6 +147,7 @@ func TestContext_SetResultUsesTaskID(t *testing.T) {
 		store:       store,
 		handlers:    nil,
 		index:       -1,
+		input:       nil,
 	}
 
 	// Each task sets its result
@@ -189,7 +195,7 @@ func TestContext_StartTimeBeforeExecution(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -262,7 +268,7 @@ func TestContext_AllPropertiesIntegration(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 

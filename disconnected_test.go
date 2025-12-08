@@ -99,7 +99,7 @@ func TestDisconnectedGraph_AllZeroIndegreeTasksIdentified(t *testing.T) {
 	assert.Equal(t, 1, engine.indegree["task6"], "task6 should have indegree 1")
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.True(t, result.Success)
@@ -173,7 +173,7 @@ func TestDisconnectedGraph_AllSubgraphsExecuteInSameExecution(t *testing.T) {
 	}
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.True(t, result.Success)
@@ -274,7 +274,7 @@ func TestDisconnectedGraph_FailFastCancelsAllSubgraphs(t *testing.T) {
 	}
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -379,7 +379,7 @@ func TestDisconnectedGraph_AllTasksReachTerminalState(t *testing.T) {
 	}
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -470,7 +470,7 @@ func TestDisconnectedGraph_ZeroIndegreeTasksStartConcurrently(t *testing.T) {
 	}
 
 	// Execute
-	result, err := engine.Execute(context.Background())
+	result, err := engine.Execute(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.True(t, result.Success)

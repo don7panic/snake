@@ -17,6 +17,9 @@ type Context struct {
 	store    Datastore
 	handlers []HandlerFunc
 	index    int
+
+	// input holds the execution-specific input parameter
+	input any
 }
 
 // Next advances to the next handler in the middleware chain
@@ -43,4 +46,10 @@ func (ctx *Context) GetResult(key string) (any, bool) {
 // TaskID returns the ID of the current task
 func (ctx *Context) TaskID() string {
 	return ctx.taskID
+}
+
+// Input returns the execution input parameter
+// Users should perform type assertion to convert to the expected type
+func (ctx *Context) Input() any {
+	return ctx.input
 }
