@@ -18,7 +18,7 @@ import (
     "context"
     "fmt"
 
-    "snake/examples/e2e"
+    "github.com/don7panic/snake/examples/e2e"
 )
 
 func main() {
@@ -130,7 +130,7 @@ To run the example demonstrations:
 ```go
 package main
 
-import "snake/examples"
+import "github.com/don7panic/snake/examples"
 
 func main() {
     // Demonstrate basic panic recovery

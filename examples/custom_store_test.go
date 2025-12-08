@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"snake"
+	"github.com/don7panic/snake"
 
 	"github.com/stretchr/testify/assert"
 )

@@ -6,7 +6,7 @@ import (
 	"log"
 	"runtime/debug"
 
-	"snake"
+	"github.com/don7panic/snake"
 )
 
 // RecoveryMiddleware is a middleware that catches panics in task handlers

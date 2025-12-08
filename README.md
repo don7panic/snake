@@ -2,6 +2,10 @@
 
 一个轻量的 Golang 进程内 DAG 任务编排框架。显式依赖、自动数据流转、并行调度，可插拔中间件（recovery / tracing / logging / metrics）。
 
+```
+go get github.com/don7panic/snake
+```
+
 ## 特性
 
 - 显式依赖建模：用 TaskID 声明上下游关系，Engine 自动拓扑调度并并行执行。
@@ -21,7 +25,7 @@ import (
     "fmt"
     "time"
 
-    "snake"
+    "github.com/don7panic/snake"
 )
 
 // 定义输入类型
@@ -119,7 +123,40 @@ func main() {
 ## 开发与测试
 
 ```bash
+# 运行测试
 go test ./...
+
+# 查看测试覆盖率
+go test -v -cover ./...
+
+# 格式化代码
+go fmt ./...
+
+# 静态检查
+go vet ./...
 ```
 
-更多设计细节见 `docs/ARCHITECTURE.md`，示例见 `examples/`。
+## 安装
+
+```bash
+go get github.com/don7panic/snake
+```
+
+## 示例
+
+更多使用示例见 `examples/` 目录：
+- `examples/recovery_example.go` - 恢复中间件示例
+- `examples/custom_store_test.go` - 自定义数据存储示例
+- `examples/e2e/order_workflow.go` - 端到端订单处理示例
+
+## 架构设计
+
+详细架构说明见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
+## 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+## 许可证
+
+MIT License

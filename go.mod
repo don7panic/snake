@@ -1,4 +1,4 @@
-module snake
+module github.com/don7panic/snake
 
 go 1.24.0
 

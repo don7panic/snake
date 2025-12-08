@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"snake"
+	"github.com/don7panic/snake"
 )
 
 // DemoRecoveryMiddleware demonstrates how to use the recovery middleware

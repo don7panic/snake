@@ -3,8 +3,9 @@ package e2e
 import (
 	"context"
 	"fmt"
-	"snake"
 	"sync"
+
+	"github.com/don7panic/snake"
 )
 
 type OrderService struct {
