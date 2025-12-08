@@ -1,4 +1,4 @@
-.PHONY: test lint build clean fmt vet
+.PHONY: test test-race lint build clean fmt fmt-check vet
 
 # Default target
 all: fmt vet test build
@@ -11,6 +11,10 @@ build:
 test:
 	go test -v ./...
 
+# Run tests with race detector
+test-race:
+	go test -race ./...
+
 # Run tests with coverage
 test-coverage:
 	go test -v -race -coverprofile=coverage.out ./...
@@ -19,6 +23,15 @@ test-coverage:
 # Format code
 fmt:
 	go fmt ./...
+
+# Check formatting without writing changes
+fmt-check:
+	@fmt_output=$$(gofmt -l .); \
+	if [ -n "$$fmt_output" ]; then \
+		echo "The following files need gofmt:"; \
+		echo "$$fmt_output"; \
+		exit 1; \
+	fi
 
 # Run go vet
 vet:
