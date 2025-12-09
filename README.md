@@ -1,21 +1,23 @@
 # snake
 
-一个轻量的 Golang 进程内 DAG 任务编排框架。显式依赖、自动数据流转、并行调度，可插拔中间件（recovery / tracing / logging / metrics）。
+Lightweight in-process DAG orchestrator for Go. Declare explicit dependencies, share data across tasks, run work in parallel, and extend execution with pluggable middleware (recovery, tracing, logging, metrics, and more).
 
-```
+```bash
 go get github.com/don7panic/snake
 ```
 
-## 特性
+For the Chinese version, see `README.zh.md`.
 
-- 显式依赖建模：用 TaskID 声明上下游关系，Engine 自动拓扑调度并并行执行。
-- 数据共享：内置并发安全的 Datastore，任务用 `ctx.SetResult`/`ctx.GetResult` 读写数据；key 可用 TaskID 或自定义字符串，方便一个任务写多个结果，甚至跨任务共享同名 key（需业务自控覆盖语义）。
-- 中间件链：与 gin 类似的 `HandlerFunc` 链，支持全局和任务级中间件。
-- 超时与 Fail-Fast：全局超时（`WithGlobalTimeout`）和任务级/默认超时；任务失败触发 Fail-Fast（未开始的任务标记为 `CANCELLED`）。
-- 排障友好：`ExecutionResult` 返回任务报告与拓扑序 `TopoOrder`，便于检查执行顺序。
-- 可复用的 Engine：一次构建 DAG 后可多次、并发执行，每次 `Execute` 接受独立的输入参数。
+## Why snake
 
-## 快速开始
+- Explicit dependency graph: declare upstream tasks by `TaskID`; the engine builds a DAG and schedules tasks in topo order with parallel fan-out.
+- Built-in datastore: concurrent-safe `ctx.SetResult`/`ctx.GetResult` for passing results; keys can be task IDs or custom strings to support multiple outputs.
+- Middleware chain: gin-style `HandlerFunc` chain with global and task-level middleware.
+- Timeouts and fail-fast: global timeout (`WithGlobalTimeout`) plus default/task-level timeouts; a failed task cancels remaining work and marks unstarted tasks as `CANCELLED`.
+- Debug-friendly outputs: `ExecutionResult` exposes per-task reports and the exact `TopoOrder`.
+- Reusable engine: build the DAG once, then execute it multiple times (even concurrently) with different inputs.
+
+## Quick start
 
 ```go
 package main
@@ -28,7 +30,7 @@ import (
     "github.com/don7panic/snake"
 )
 
-// 定义输入类型
+// Input passed to a single Execute call
 type WorkflowInput struct {
     Value string
 }
@@ -39,7 +41,7 @@ func main() {
         snake.WithDefaultTaskTimeout(2*time.Second),
     )
 
-    // 全局中间件，例如 panic recovery
+    // Global middleware for logging/tracing/recovery
     engine.Use(func(c context.Context, ctx *snake.Context) error {
         fmt.Println("start", ctx.TaskID())
         err := ctx.Next(c)
@@ -48,21 +50,17 @@ func main() {
     })
 
     a := snake.NewTask("A", func(c context.Context, ctx *snake.Context) error {
-        // 从 Context 获取输入参数（Input 为本次 Execute 的只读快照）
         input, ok := ctx.Input().(*WorkflowInput)
         if !ok {
             return fmt.Errorf("invalid input type")
         }
 
-        // 使用输入参数处理业务逻辑
-        result := fmt.Sprintf("processed: %s", input.Value)
-        ctx.SetResult("A", result)
+        ctx.SetResult("A", fmt.Sprintf("processed: %s", input.Value))
         return nil
     })
 
     b := snake.NewTask("B", func(c context.Context, ctx *snake.Context) error {
-        // 读取上游任务结果
-        v, _ := ctx.GetResult("A")
+        v, _ := ctx.GetResult("A") // read upstream result
         ctx.SetResult("B", fmt.Sprintf("b got %v", v))
         return nil
     }, snake.WithDependsOn("A"))
@@ -71,12 +69,11 @@ func main() {
         panic(err)
     }
 
-    // 确认 DAG，无环且依赖齐全
+    // Validate DAG: checks missing deps and cycles
     if err := engine.Build(); err != nil {
         panic(err)
     }
 
-    // 执行时传入输入参数
     input := &WorkflowInput{Value: "hello"}
     result, err := engine.Execute(context.Background(), input)
     if err != nil {
@@ -89,8 +86,8 @@ func main() {
     if v, ok := result.GetResult("B"); ok {
         fmt.Println("B result:", v)
     }
-    
-    // Engine 可以用不同的输入多次执行
+
+    // Reuse the same engine with new inputs
     input2 := &WorkflowInput{Value: "world"}
     result2, err := engine.Execute(context.Background(), input2)
     if err != nil {
@@ -100,63 +97,51 @@ func main() {
 }
 ```
 
-## 任务与中间件
+## Core concepts
 
-- 任务 Handler 签名：`func(c context.Context, ctx *snake.Context) error`。
-- 在 handler 内通过 `ctx.Next(c)` 进入链路的下一个 handler；业务 handler 放在链尾。
-- 任务级别可自定义超时：`snake.WithTimeout(d)`。
+- `Task`: handler signature `func(c context.Context, ctx *snake.Context) error`. Use `ctx.Next(c)` to step through middleware; place the business handler at the end of the chain.
+- `Context`: exposes the execution input (`ctx.Input()`), datastore helpers (`SetResult`/`GetResult`), and task metadata (`TaskID`, deadlines, logger).
+- `Datastore`: each `Execute` call gets a fresh store; customize via `WithDatastoreFactory` if you need a different backend.
+- `Timeouts`: set defaults with `WithDefaultTaskTimeout`, override per task with `WithTimeout(d)`.
+- `Fail-fast`: the first failure cancels remaining work; unstarted tasks become `CANCELLED`.
 
-## 运行与限制
+## Observability and debugging
 
-- 推荐在并发 `Execute` 前调用一次 `Build` 做依赖/环校验；`Execute` 可并发调用，每次使用 DAG 快照和独立的 Datastore。
-- **新特性**：`Execute` 方法现在接受输入参数，允许同一个 Engine 用不同的输入多次执行。
-- 每次执行都会通过 `DatastoreFactory` 创建全新的 Datastore 实例；可通过 `WithDatastoreFactory` 注入自定义工厂函数。
-- Handler 通过 `ctx.Input()` 访问本次执行传入的输入参数（视为只读引用，避免在并行任务中原地修改），需要进行类型断言；如需变更请先拷贝。
-- 遇到第一个任务失败（或超时）即触发 Fail-Fast，未开始的任务标记为 `CANCELLED`。
+- `ExecutionResult.Reports` includes per-task status, error, and duration.
+- `ExecutionResult.TopoOrder` shows the actual execution order for quick inspection.
+- Extend logging/tracing/metrics/rate limiting through middleware.
 
-## 观察与排障
-
-- `ExecutionResult.Reports` 包含每个任务的状态/错误/耗时。
-- `ExecutionResult.TopoOrder` 返回拓扑排序，便于确认执行顺序/依赖。
-- 可通过中间件扩展日志、Tracing、Metrics、限流等。
-
-## 开发与测试
+## Development
 
 ```bash
-# 运行测试
+# Run tests
 go test ./...
 
-# 查看测试覆盖率
+# Coverage
 go test -v -cover ./...
 
-# 格式化代码
+# Format code
 go fmt ./...
 
-# 静态检查
+# Static checks
 go vet ./...
 ```
 
-## 安装
+## Examples
 
-```bash
-go get github.com/don7panic/snake
-```
+See `examples/` for runnable samples:
+- `examples/recovery_example.go` - recovery middleware
+- `examples/custom_store_test.go` - custom datastore
+- `examples/e2e/order_workflow.go` - end-to-end order flow
 
-## 示例
+## Architecture
 
-更多使用示例见 `examples/` 目录：
-- `examples/recovery_example.go` - 恢复中间件示例
-- `examples/custom_store_test.go` - 自定义数据存储示例
-- `examples/e2e/order_workflow.go` - 端到端订单处理示例
+High-level design notes live in `docs/ARCHITECTURE.md`.
 
-## 架构设计
+## Contributing
 
-详细架构说明见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+Issues and pull requests are welcome.
 
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 许可证
+## License
 
 MIT License
