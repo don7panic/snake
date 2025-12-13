@@ -344,17 +344,20 @@ func (e *Engine) Execute(ctx context.Context, input any) (*ExecutionResult, erro
 	}
 
 	// Execute tasks in parallel
-	result := e.executeParallel(ctx, state, adjSnapshot, indegreeSnapshot)
+	result, err := e.executeParallel(ctx, state, adjSnapshot, indegreeSnapshot)
 
-	result.TopoOrder = topoSnapshot
-	result.Store = store
+	if result != nil {
+		result.TopoOrder = topoSnapshot
+		result.Store = store
+	}
 
-	return result, nil
+	return result, err
 }
 
-// executeParallel schedules and executes tasks in parallel based on their dependencies
-// It spawns a goroutine for each ready task and manages the execution lifecycle
-func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj map[string][]string, indegree map[string]int) *ExecutionResult {
+// executeParallel schedules and executes tasks in parallel based on their dependencies.
+// It spawns a goroutine for each ready task and manages the execution lifecycle.
+// Returns the aggregated ExecutionResult plus the first observed error (if any).
+func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj map[string][]string, indegree map[string]int) (*ExecutionResult, error) {
 	var wg sync.WaitGroup
 	reports := make(map[string]*TaskReport)
 	var reportsMu sync.Mutex
@@ -383,6 +386,17 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 
 	// Track if execution has failed
 	executionFailed := &atomic.Bool{}
+	var firstErr error
+	var firstErrOnce sync.Once
+
+	recordErr := func(err error) {
+		if err == nil {
+			return
+		}
+		firstErrOnce.Do(func() {
+			firstErr = err
+		})
+	}
 
 	// Spawn a goroutine to process tasks from the ready queue
 	done := make(chan struct{})
@@ -400,6 +414,7 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 					Duration:  0,
 				}
 				reportsMu.Unlock()
+				recordErr(execCtx.Err())
 
 				for _, dependentID := range adj[taskID] {
 					newCount := state.pendingDeps[dependentID].Add(-1)
@@ -431,15 +446,17 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 				}
 
 				// Execute the task
-				report := e.executeTask(execCtx, tid, state.executionID, state.store, state.input)
+				report, taskErr := e.executeTask(execCtx, tid, state.executionID, state.store, state.input)
 
 				// Store the report
 				reportsMu.Lock()
 				reports[tid] = report
 				reportsMu.Unlock()
 
+				recordErr(taskErr)
+
 				// Check if task failed and trigger Fail-Fast
-				if report.Status == TaskStatusFailed && e.errorStrategy == FailFast {
+				if taskErr != nil && e.errorStrategy == FailFast {
 					// Mark execution as failed
 					executionFailed.Store(true)
 					// Cancel execution context to signal all other tasks
@@ -475,22 +492,6 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 	// Wait for the processing goroutine to finish
 	<-done
 
-	// Mark any tasks that were never started as CANCELLED
-	reportsMu.Lock()
-	for _, taskID := range state.taskIDs {
-		if _, exists := reports[taskID]; !exists {
-			reports[taskID] = &TaskReport{
-				TaskID:    taskID,
-				Status:    TaskStatusCancelled,
-				Err:       execCtx.Err(),
-				StartTime: time.Now(),
-				EndTime:   time.Now(),
-				Duration:  0,
-			}
-		}
-	}
-	reportsMu.Unlock()
-
 	// Determine overall success
 	success := true
 	for _, report := range reports {
@@ -500,17 +501,25 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 		}
 	}
 
-	return &ExecutionResult{
+	result := &ExecutionResult{
 		ExecutionID: state.executionID,
 		Success:     success,
 		Reports:     reports,
 		Store:       state.store,
 	}
+
+	// Pick first error if any task failed/cancelled
+	var execErr error
+	if firstErr != nil {
+		execErr = firstErr
+	}
+
+	return result, execErr
 }
 
 // executeTask executes a single task with proper context, timeout, and middleware chain
 // It creates the task Context, applies timeouts, builds the handler chain, and records execution results
-func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID string, store Datastore, input any) *TaskReport {
+func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID string, store Datastore, input any) (*TaskReport, error) {
 	// Get the task
 	task := e.tasks[taskID]
 
@@ -573,7 +582,7 @@ func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID
 		)
 		report.Status = TaskStatusFailed
 		report.Err = err
-		return report
+		return report, err
 	}
 
 	e.logger.Info(taskCtx, "task_succeeded",
@@ -583,7 +592,7 @@ func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID
 	)
 	report.Status = TaskStatusSuccess
 
-	return report
+	return report, nil
 }
 
 // reset returns a clean Datastore for a new execution by calling the factory.
