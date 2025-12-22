@@ -209,7 +209,7 @@ func TestDisconnectedGraph_AllSubgraphsExecuteInSameExecution(t *testing.T) {
 // TestDisconnectedGraph_FailFastCancelsAllSubgraphs verifies that when one subgraph fails,
 // all other subgraphs are cancelled in Fail-Fast mode
 func TestDisconnectedGraph_FailFastCancelsAllSubgraphs(t *testing.T) {
-	engine := NewEngine(WithFailFast())
+	engine := NewEngine(WithErrorStrategy(FailFast))
 
 	// Create three disconnected subgraphs
 	// Subgraph 1: task1 (will fail)
@@ -312,7 +312,7 @@ func TestDisconnectedGraph_FailFastCancelsAllSubgraphs(t *testing.T) {
 // TestDisconnectedGraph_AllTasksReachTerminalState verifies that all tasks in all subgraphs
 // reach a terminal state (SUCCESS, FAILED, or CANCELLED)
 func TestDisconnectedGraph_AllTasksReachTerminalState(t *testing.T) {
-	engine := NewEngine(WithFailFast())
+	engine := NewEngine(WithErrorStrategy(FailFast))
 
 	// Create a complex disconnected graph with a failure
 	// Subgraph 1: task1 -> task2 -> task3 (task2 will fail)

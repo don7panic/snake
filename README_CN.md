@@ -11,7 +11,9 @@ go get github.com/don7panic/snake
 - 显式依赖建模：用 TaskID 声明上下游关系，Engine 自动拓扑调度并并行执行。
 - 数据共享：内置并发安全的 Datastore，任务用 `ctx.SetResult`/`ctx.GetResult` 读写数据；key 可用 TaskID 或自定义字符串，方便一个任务写多个结果，甚至跨任务共享同名 key（需业务自控覆盖语义）。
 - 中间件链：与 gin 类似的 `HandlerFunc` 链，支持全局和任务级中间件。
-- 超时与 Fail-Fast：全局超时（`WithGlobalTimeout`）和任务级/默认超时；任务失败触发 Fail-Fast（未开始的任务标记为 `CANCELLED`）。
+- 错误处理策略：支持 `FailFast`（默认，一挂全挂）和 `RunAll`（尽力而为，运行所有无关任务）。
+- 容错机制：任务级 `WithAllowFailure(true)`，允许特定任务失败而不中断整个工作流。
+- 超时控制：局超时（`WithGlobalTimeout`）和任务级/默认超时。
 - 排障友好：`ExecutionResult` 返回任务报告与拓扑序 `TopoOrder`，便于检查执行顺序。
 - 可复用的 Engine：一次构建 DAG 后可多次、并发执行，每次 `Execute` 接受独立的输入参数。
 
@@ -112,7 +114,9 @@ func main() {
 - **新特性**：`Execute` 方法现在接受输入参数，允许同一个 Engine 用不同的输入多次执行。
 - 每次执行都会通过 `DatastoreFactory` 创建全新的 Datastore 实例；可通过 `WithDatastoreFactory` 注入自定义工厂函数。
 - Handler 通过 `ctx.Input()` 访问本次执行传入的输入参数（视为只读引用，避免在并行任务中原地修改），需要进行类型断言；如需变更请先拷贝。
-- 遇到第一个任务失败（或超时）即触发 Fail-Fast，未开始的任务标记为 `CANCELLED`。
+- 遇到第一个任务失败（或超时）且策略为 FailFast 时触发全局取消，未开始的任务标记为 `CANCELLED`。
+- 如果策略为 `RunAll`，则失败任务仅影响其下游依赖，其他独立分支继续运行。
+- 如果任务标记为 `WithAllowFailure(true)`，即使失败也会被视为“已处理”，下游任务视逻辑决定是否运行。
 
 ## 观察与排障
 

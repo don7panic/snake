@@ -16,15 +16,17 @@ type ErrorStrategy int
 const (
 	// FailFast stops execution immediately when any task fails
 	FailFast ErrorStrategy = iota
+	// RunAll attempts to execute all independent paths even if some tasks fail
+	RunAll
 )
 
 // Option is a function that configures an Engine
 type Option func(*Engine)
 
-// WithFailFast sets the error handling strategy to Fail-Fast mode
-func WithFailFast() Option {
+// WithErrorStrategy sets the error handling strategy
+func WithErrorStrategy(strategy ErrorStrategy) Option {
 	return func(e *Engine) {
-		e.errorStrategy = FailFast
+		e.errorStrategy = strategy
 	}
 }
 
@@ -32,7 +34,9 @@ func WithFailFast() Option {
 // The factory will be called for each execution to create a fresh Datastore instance
 func WithDatastoreFactory(factory DatastoreFactory) Option {
 	return func(e *Engine) {
-		e.storeFactory = factory
+		if factory != nil {
+			e.storeFactory = factory
+		}
 	}
 }
 
@@ -53,7 +57,9 @@ func WithDefaultTaskTimeout(timeout time.Duration) Option {
 // WithLogger injects a custom Logger implementation
 func WithLogger(logger Logger) Option {
 	return func(e *Engine) {
-		e.logger = logger
+		if logger != nil {
+			e.logger = logger
+		}
 	}
 }
 
@@ -129,21 +135,19 @@ func (e *Engine) Register(tasks ...*Task) error {
 	}
 
 	for _, task := range tasks {
-		// Validate non-empty ID
+		if task == nil {
+			return ErrNilTask
+		}
 		if task.id == "" {
 			return ErrEmptyTaskID
 		}
-
-		// Validate non-nil handler
 		if task.handler == nil {
 			return ErrEmptyTaskHandler
 		}
-
 		// Validate unique ID
 		if _, exists := e.tasks[task.id]; exists {
-			return ErrTaskAlreadyExists
+			return fmt.Errorf("task %q already exists", task.id)
 		}
-
 		// Store the task
 		e.tasks[task.id] = task
 	}
@@ -435,7 +439,12 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 			wg.Add(1)
 
 			if sem != nil {
-				sem <- struct{}{}
+				select {
+				case sem <- struct{}{}:
+				case <-execCtx.Done():
+					wg.Done()
+					continue
+				}
 			}
 
 			// Spawn goroutine to execute task
@@ -445,9 +454,54 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 					defer func() { <-sem }()
 				}
 
-				// Execute the task
-				// Pass reports map and mutex to allow checking parent status (Cascade Skip)
-				report, taskErr := e.executeTask(execCtx, tid, state.executionID, state.store, state.input, reports, &reportsMu)
+				// Resolve dependencies before execution
+				reportsMu.Lock()
+				task := e.tasks[tid]
+				var skipOrCancelReport *TaskReport
+				for _, depID := range task.dependsOn {
+					if depReport, ok := reports[depID]; ok {
+						if depReport.Status == TaskStatusSkipped {
+							// Cascade Skip: if parent skipped, child is skipped
+							skipOrCancelReport = &TaskReport{
+								TaskID:    tid,
+								Status:    TaskStatusSkipped,
+								StartTime: time.Now(),
+								EndTime:   time.Now(),
+								Duration:  0,
+							}
+							break
+						}
+						if depReport.Status == TaskStatusFailed || depReport.Status == TaskStatusCancelled {
+							// Upstream failure
+							depTask := e.tasks[depID]
+							if !depTask.allowFailure {
+								// Parent failed and failure is not allowed -> Cancel self
+								skipOrCancelReport = &TaskReport{
+									TaskID:    tid,
+									Status:    TaskStatusCancelled,
+									Err:       fmt.Errorf("upstream task %s failed or cancelled", depID),
+									StartTime: time.Now(),
+									EndTime:   time.Now(),
+									Duration:  0,
+								}
+								break
+							}
+							// If parent allowFailure=true, we continue execution!
+						}
+					}
+				}
+				reportsMu.Unlock()
+
+				var report *TaskReport
+				var taskErr error
+
+				if skipOrCancelReport != nil {
+					report = skipOrCancelReport
+					taskErr = nil // Skipped/Cancelled is not an execution error for the engine loop
+				} else {
+					// safe to run
+					report, taskErr = e.executeTask(execCtx, tid, state.executionID, state.store, state.input)
+				}
 
 				// Store the report
 				reportsMu.Lock()
@@ -457,14 +511,19 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 				recordErr(taskErr)
 
 				// Check if task failed and trigger Fail-Fast
-				if taskErr != nil && e.errorStrategy == FailFast {
-					// Mark execution as failed
-					executionFailed.Store(true)
-					// Cancel execution context to signal all other tasks
-					cancel()
+				if taskErr != nil {
+					task := e.tasks[tid]
+					// Only trigger global cancel if strategy is FailFast AND task is critical (not AllowFailure)
+					if e.errorStrategy == FailFast && !task.allowFailure {
+						// Mark execution as failed
+						executionFailed.Store(true)
+						// Cancel execution context to signal all other tasks
+						cancel()
+					}
 				}
 
-				// On task completion, process dependents
+				// On task completion (Success, Failed, Skipped, Cancelled), process dependents
+				// Even if Cancelled/Skipped, we must decrement dependents so they can be processed (and likely Cascaded)
 				for _, dependentID := range adj[tid] {
 					// Atomically decrement pendingDeps for this dependent
 					newCount := state.pendingDeps[dependentID].Add(-1)
@@ -498,8 +557,14 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 	for _, report := range reports {
 		// Skipped tasks are not considered failures
 		if report.Status != TaskStatusSuccess && report.Status != TaskStatusSkipped {
-			success = false
-			break
+			// If AllowFailure is enabled for a failed task, it shouldn't fail the workflow success status?
+			// Usually workflow success implies "all critical tasks succeeded"
+			// Let's check AllowFailure of the task
+			task := e.tasks[report.TaskID]
+			if !task.allowFailure {
+				success = false
+				break
+			}
 		}
 	}
 
@@ -521,38 +586,12 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 
 // executeTask executes a single task with proper context, timeout, and middleware chain
 // It creates the task Context, applies timeouts, builds the handler chain, and records execution results
-func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID string, store Datastore, input any, reports map[string]*TaskReport, reportsMu *sync.Mutex) (*TaskReport, error) {
+func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID string, store Datastore, input any) (*TaskReport, error) {
 	// Get the task
 	task := e.tasks[taskID]
 
 	// Record start time
 	startTime := time.Now()
-
-	// Cascade Skip Check
-	// If any dependency was skipped, this task should also be skipped
-	shouldSkip := false
-	if reports != nil && reportsMu != nil {
-		reportsMu.Lock()
-		for _, depID := range task.dependsOn {
-			if r, ok := reports[depID]; ok {
-				if r.Status == TaskStatusSkipped {
-					shouldSkip = true
-					break
-				}
-			}
-		}
-		reportsMu.Unlock()
-	}
-
-	if shouldSkip {
-		return &TaskReport{
-			TaskID:    taskID,
-			Status:    TaskStatusSkipped,
-			StartTime: startTime,
-			EndTime:   time.Now(),
-			Duration:  0,
-		}, nil
-	}
 
 	// Create task context with timeout early to cover condition check
 	taskCtx := execCtx
@@ -569,21 +608,29 @@ func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID
 	}
 	defer cancel()
 
-	// Construct temporary Context for Condition check
-	// We need access to Store to check previous results
-	ctxForCondition := &Context{
+	// Build handler chain: global middlewares + task middlewares + handler
+	handlers := make([]HandlerFunc, 0, len(e.middlewares)+len(task.middlewares)+1)
+	handlers = append(handlers, e.middlewares...)
+	handlers = append(handlers, task.middlewares...)
+	handlers = append(handlers, task.handler)
+
+	// Create full task Context
+	// Unified context for both Condition check and Execution
+	ctx := &Context{
 		taskID:      taskID,
 		executionID: executionID,
 		StartTime:   startTime,
 		store:       store,
+		handlers:    handlers,
+		index:       -1, // Start at -1 so first Next() call advances to 0
 		input:       input,
-		// No handlers needed for condition check
 	}
 
-	// Check Condition
+	// Check Condition using the full context
 	if task.condition != nil {
 		// Execute condition function
-		shouldRun := task.condition(taskCtx, ctxForCondition)
+		// Note: Condition should be pure logic, but we pass the full context for access to everything
+		shouldRun := task.condition(taskCtx, ctx)
 		if !shouldRun {
 			return &TaskReport{
 				TaskID:    taskID,
@@ -593,23 +640,6 @@ func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID
 				Duration:  time.Since(startTime),
 			}, nil
 		}
-	}
-
-	// Build handler chain: global middlewares + task middlewares + handler
-	handlers := make([]HandlerFunc, 0, len(e.middlewares)+len(task.middlewares)+1)
-	handlers = append(handlers, e.middlewares...)
-	handlers = append(handlers, task.middlewares...)
-	handlers = append(handlers, task.handler)
-
-	// Create full task Context
-	ctx := &Context{
-		taskID:      taskID,
-		executionID: executionID,
-		StartTime:   startTime,
-		store:       store,
-		handlers:    handlers,
-		index:       -1, // Start at -1 so first Next() call advances to 0
-		input:       input,
 	}
 
 	// Execute handler chain starting from index 0

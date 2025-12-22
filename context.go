@@ -27,6 +27,10 @@ type Context struct {
 func (ctx *Context) Next(c context.Context) error {
 	ctx.index++
 	if ctx.index < len(ctx.handlers) {
+		// Check for context cancellation before executing the next handler
+		if err := c.Err(); err != nil {
+			return err
+		}
 		return ctx.handlers[ctx.index](c, ctx)
 	}
 	return nil

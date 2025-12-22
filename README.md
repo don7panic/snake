@@ -13,7 +13,9 @@ For the Chinese version, see `README.zh.md`.
 - Explicit dependency graph: declare upstream tasks by `TaskID`; the engine builds a DAG and schedules tasks in topo order with parallel fan-out.
 - Built-in datastore: concurrent-safe `ctx.SetResult`/`ctx.GetResult` for passing results; keys can be task IDs or custom strings to support multiple outputs.
 - Middleware chain: gin-style `HandlerFunc` chain with global and task-level middleware.
-- Timeouts and fail-fast: global timeout (`WithGlobalTimeout`) plus default/task-level timeouts; a failed task cancels remaining work and marks unstarted tasks as `CANCELLED`.
+- Error strategies: choose between `FailFast` (default) or `RunAll` (execute all independent tasks).
+- Failure tolerance: per-task `WithAllowFailure(true)` to skip global cancellation on specific task failures.
+- Timeouts: global timeout (`WithGlobalTimeout`) plus default/task-level timeouts.
 - Debug-friendly outputs: `ExecutionResult` exposes per-task reports and the exact `TopoOrder`.
 - Reusable engine: build the DAG once, then execute it multiple times (even concurrently) with different inputs.
 
@@ -103,7 +105,9 @@ func main() {
 - `Context`: exposes the execution input (`ctx.Input()`), datastore helpers (`SetResult`/`GetResult`), and task metadata (`TaskID`, deadlines, logger).
 - `Datastore`: each `Execute` call gets a fresh store; customize via `WithDatastoreFactory` if you need a different backend.
 - `Timeouts`: set defaults with `WithDefaultTaskTimeout`, override per task with `WithTimeout(d)`.
-- `Fail-fast`: the first failure cancels remaining work; unstarted tasks become `CANCELLED`.
+- `Error Handling`: `WithErrorStrategy(snake.FailFast)` (stop on first error) or `snake.RunAll` (run disjoint paths).
+- `AllowFailure`: use `WithAllowFailure(true)` for non-critical tasks that shouldn't stop the workflow.
+- `Fail-fast`: under FailFast strategy, the first failure cancels remaining work; unstarted tasks become `CANCELLED`.
 
 ## Observability and debugging
 

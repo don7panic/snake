@@ -9,7 +9,6 @@ import (
 type TaskStatus string
 
 const (
-	TaskStatusPending   TaskStatus = "PENDING"
 	TaskStatusSuccess   TaskStatus = "SUCCESS"
 	TaskStatusFailed    TaskStatus = "FAILED"
 	TaskStatusSkipped   TaskStatus = "SKIPPED"
@@ -21,22 +20,24 @@ type ConditionFunc func(c context.Context, ctx *Context) bool
 
 // Task represents a single executable unit in the workflow
 type Task struct {
-	id          string
-	dependsOn   []string
-	handler     HandlerFunc
-	middlewares []HandlerFunc
-	timeout     time.Duration
-	condition   ConditionFunc
+	id           string
+	dependsOn    []string
+	handler      HandlerFunc
+	middlewares  []HandlerFunc
+	timeout      time.Duration
+	condition    ConditionFunc
+	allowFailure bool
 }
 
 // NewTask creates a new Task with the given ID and handler, applying any provided options
 func NewTask(id string, handler HandlerFunc, options ...TaskOption) *Task {
 	task := &Task{
-		id:          id,
-		handler:     handler,
-		dependsOn:   []string{},
-		middlewares: []HandlerFunc{},
-		timeout:     0, // zero means no timeout
+		id:           id,
+		handler:      handler,
+		dependsOn:    []string{},
+		middlewares:  []HandlerFunc{},
+		timeout:      0, // zero means no timeout
+		allowFailure: false,
 	}
 
 	for _, opt := range options {
@@ -71,6 +72,13 @@ func WithMiddlewares(middlewares ...HandlerFunc) TaskOption {
 func WithCondition(cond ConditionFunc) TaskOption {
 	return func(t *Task) {
 		t.condition = cond
+	}
+}
+
+// WithAllowFailure sets whether the task is allowed to fail without cancelling the workflow
+func WithAllowFailure(allow bool) TaskOption {
+	return func(t *Task) {
+		t.allowFailure = allow
 	}
 }
 

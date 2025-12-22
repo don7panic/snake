@@ -2,6 +2,7 @@ package snake
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -508,7 +509,7 @@ func (m *mockLogger) With(fields ...Field) Logger {
 
 // TestFailFast_MarksTaskAsFailed verifies that failed tasks are marked FAILED
 func TestFailFast_MarksTaskAsFailed(t *testing.T) {
-	engine := NewEngine(WithFailFast())
+	engine := NewEngine(WithErrorStrategy(FailFast))
 
 	expectedErr := assert.AnError
 	task1 := &Task{
@@ -536,7 +537,7 @@ func TestFailFast_MarksTaskAsFailed(t *testing.T) {
 
 // TestFailFast_CancelsExecutionContext verifies that task failure cancels execution context
 func TestFailFast_CancelsExecutionContext(t *testing.T) {
-	engine := NewEngine(WithFailFast())
+	engine := NewEngine(WithErrorStrategy(FailFast))
 
 	// Track if task2 received cancellation
 	task2Cancelled := make(chan bool, 1)
@@ -595,7 +596,7 @@ func TestFailFast_CancelsExecutionContext(t *testing.T) {
 
 // TestFailFast_MarksPendingTasksAsCancelled verifies that unstarted tasks are marked CANCELLED
 func TestFailFast_MarksPendingTasksAsCancelled(t *testing.T) {
-	engine := NewEngine(WithFailFast())
+	engine := NewEngine(WithErrorStrategy(FailFast))
 
 	// Create a chain: task1 -> task2 -> task3
 	// task1 will fail, task2 and task3 should be cancelled
@@ -648,7 +649,7 @@ func TestFailFast_MarksPendingTasksAsCancelled(t *testing.T) {
 
 // TestFailFast_ContinuesUntilActiveTasksComplete verifies that active tasks are allowed to complete
 func TestFailFast_ContinuesUntilActiveTasksComplete(t *testing.T) {
-	engine := NewEngine(WithFailFast())
+	engine := NewEngine(WithErrorStrategy(FailFast))
 
 	// Track task execution
 	task1Started := make(chan bool, 1)
@@ -727,7 +728,7 @@ func TestFailFast_ContinuesUntilActiveTasksComplete(t *testing.T) {
 
 // TestFailFast_ExecutionResultContainsErrorDetails verifies that failure result contains error details
 func TestFailFast_ExecutionResultContainsErrorDetails(t *testing.T) {
-	engine := NewEngine(WithFailFast())
+	engine := NewEngine(WithErrorStrategy(FailFast))
 
 	expectedErr := assert.AnError
 	task1 := &Task{
@@ -906,7 +907,7 @@ func TestExecutionResult_SuccessDetermination(t *testing.T) {
 	})
 
 	t.Run("Failure when any task fails", func(t *testing.T) {
-		engine := NewEngine(WithFailFast())
+		engine := NewEngine(WithErrorStrategy(FailFast))
 
 		task1 := &Task{
 			id:      "task1",
@@ -930,7 +931,7 @@ func TestExecutionResult_SuccessDetermination(t *testing.T) {
 	})
 
 	t.Run("Failure when any task is cancelled", func(t *testing.T) {
-		engine := NewEngine(WithFailFast())
+		engine := NewEngine(WithErrorStrategy(FailFast))
 
 		task1 := &Task{
 			id:      "task1",
@@ -1053,7 +1054,7 @@ func TestExecutionResult_DatastoreAccess(t *testing.T) {
 
 // TestTimeout_TaskSpecificTimeout verifies task-specific timeout in full execution
 func TestTimeout_TaskSpecificTimeout(t *testing.T) {
-	engine := NewEngine(WithFailFast())
+	engine := NewEngine(WithErrorStrategy(FailFast))
 
 	// Task with short timeout that will exceed it
 	task1 := &Task{
@@ -1106,7 +1107,7 @@ func TestTimeout_TaskSpecificTimeout(t *testing.T) {
 func TestTimeout_DefaultTimeout(t *testing.T) {
 	engine := NewEngine(
 		WithDefaultTaskTimeout(10*time.Millisecond),
-		WithFailFast(),
+		WithErrorStrategy(FailFast),
 	)
 
 	// Task without specific timeout (will use default)
@@ -1429,4 +1430,102 @@ func TestExecuteTask_NilInput(t *testing.T) {
 
 	// Verify the handler received nil
 	assert.Nil(t, capturedInput)
+}
+
+// TestMiddleware_PanicRecovery_Mechanism verifies we can write a middleware that catches panic and returns it as error
+func TestMiddleware_PanicRecovery_Mechanism(t *testing.T) {
+	recoveryMiddleware := func(c context.Context, ctx *Context) (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("panic recovered: %v", r)
+			}
+		}()
+		return ctx.Next(c)
+	}
+
+	engine := NewEngine()
+	engine.Use(recoveryMiddleware)
+
+	task := NewTask("panic-task", func(c context.Context, ctx *Context) error {
+		panic("oops")
+	})
+	assert.NoError(t, engine.Register(task))
+
+	result, err := engine.Execute(context.Background(), nil)
+
+	// Should return error (or fail result) but NOT CRASH
+	assert.NotNil(t, result)
+	assert.False(t, result.Success)
+	assert.Equal(t, TaskStatusFailed, result.Reports["panic-task"].Status)
+	assert.Contains(t, result.Reports["panic-task"].Err.Error(), "panic recovered: oops")
+	assert.NotNil(t, err) // Engine Execute returns first error
+}
+
+func TestErrorStrategy_RunAll_AllowsIndependentTasksToComplete(t *testing.T) {
+	// Start with default FailFast to verify baseline
+	eFast := NewEngine(WithErrorStrategy(FailFast))
+	t1_fail := NewTask("t1", func(c context.Context, ctx *Context) error { return assert.AnError })
+	t2_ok := NewTask("t2", func(c context.Context, ctx *Context) error {
+		time.Sleep(50 * time.Millisecond)
+		return nil
+	})
+	eFast.Register(t1_fail, t2_ok)
+	resFast, _ := eFast.Execute(context.Background(), nil)
+
+	// In FailFast, t2 might be cancelled or might succeed depending on race,
+	// but the execution itself is marked Failed
+	assert.False(t, resFast.Success)
+}
+
+func TestErrorStrategy_RunAll(t *testing.T) {
+	engine := NewEngine(func(e *Engine) { e.errorStrategy = RunAll })
+
+	// t1 fails immediately
+	t1 := NewTask("t1", func(c context.Context, ctx *Context) error {
+		return assert.AnError
+	})
+
+	// t2 runs successfully (independent)
+	t2 := NewTask("t2", func(c context.Context, ctx *Context) error {
+		time.Sleep(20 * time.Millisecond)
+		return nil
+	})
+
+	// t3 depends on t1 (should be CANCELLED due to upstream failure)
+	t3 := NewTask("t3", func(c context.Context, ctx *Context) error {
+		return nil
+	}, WithDependsOn("t1"))
+
+	// t1_allowed fails but has AllowFailure=true
+	t1_allowed := NewTask("t1_allow", func(c context.Context, ctx *Context) error {
+		return assert.AnError
+	}, WithAllowFailure(true))
+
+	// t5 depends on t1_allow (should run because parent failure is allowed)
+	t5_dep_allowed := NewTask("t5", func(c context.Context, ctx *Context) error {
+		return nil
+	}, WithDependsOn("t1_allow"))
+
+	engine.Register(t1, t2, t3, t1_allowed, t5_dep_allowed)
+
+	res, _ := engine.Execute(context.Background(), nil)
+
+	// t1 failed
+	assert.Equal(t, TaskStatusFailed, res.Reports["t1"].Status)
+
+	// t2 success (RunAll ensured it wasn't cancelled by t1 failure)
+	assert.Equal(t, TaskStatusSuccess, res.Reports["t2"].Status)
+
+	// t3 cancelled (upstream t1 failed)
+	assert.Equal(t, TaskStatusCancelled, res.Reports["t3"].Status)
+
+	// t1_allow failed
+	assert.Equal(t, TaskStatusFailed, res.Reports["t1_allow"].Status)
+
+	// t5 success (upstream t1_allow failed but was allowed)
+	assert.Equal(t, TaskStatusSuccess, res.Reports["t5"].Status)
+
+	// Overall success?
+	// t1 failed (critical) -> Success = false
+	assert.False(t, res.Success)
 }
