@@ -1,6 +1,9 @@
 package snake
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // TaskStatus represents the execution state of a task
 type TaskStatus string
@@ -13,6 +16,9 @@ const (
 	TaskStatusCancelled TaskStatus = "CANCELLED"
 )
 
+// ConditionFunc is a function that determines if a task should be executed
+type ConditionFunc func(c context.Context, ctx *Context) bool
+
 // Task represents a single executable unit in the workflow
 type Task struct {
 	id          string
@@ -20,6 +26,7 @@ type Task struct {
 	handler     HandlerFunc
 	middlewares []HandlerFunc
 	timeout     time.Duration
+	condition   ConditionFunc
 }
 
 // NewTask creates a new Task with the given ID and handler, applying any provided options
@@ -57,6 +64,13 @@ func WithTimeout(timeout time.Duration) TaskOption {
 func WithMiddlewares(middlewares ...HandlerFunc) TaskOption {
 	return func(t *Task) {
 		t.middlewares = middlewares
+	}
+}
+
+// WithCondition sets the condition function for a task
+func WithCondition(cond ConditionFunc) TaskOption {
+	return func(t *Task) {
+		t.condition = cond
 	}
 }
 

@@ -13,3 +13,18 @@ type ExecutionResult struct {
 func (r *ExecutionResult) GetResult(key string) (any, bool) {
 	return r.Store.Get(key)
 }
+
+// Key represents a strongly-typed key for accessing the Datastore
+type Key[T any] struct {
+	name string
+}
+
+// Name returns the string representation of the key
+func (k Key[T]) Name() string {
+	return k.name
+}
+
+// NewKey creates a new strongly-typed key
+func NewKey[T any](name string) Key[T] {
+	return Key[T]{name: name}
+}

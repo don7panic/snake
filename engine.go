@@ -446,7 +446,8 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 				}
 
 				// Execute the task
-				report, taskErr := e.executeTask(execCtx, tid, state.executionID, state.store, state.input)
+				// Pass reports map and mutex to allow checking parent status (Cascade Skip)
+				report, taskErr := e.executeTask(execCtx, tid, state.executionID, state.store, state.input, reports, &reportsMu)
 
 				// Store the report
 				reportsMu.Lock()
@@ -495,7 +496,8 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 	// Determine overall success
 	success := true
 	for _, report := range reports {
-		if report.Status != TaskStatusSuccess {
+		// Skipped tasks are not considered failures
+		if report.Status != TaskStatusSuccess && report.Status != TaskStatusSkipped {
 			success = false
 			break
 		}
@@ -519,21 +521,40 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 
 // executeTask executes a single task with proper context, timeout, and middleware chain
 // It creates the task Context, applies timeouts, builds the handler chain, and records execution results
-func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID string, store Datastore, input any) (*TaskReport, error) {
+func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID string, store Datastore, input any, reports map[string]*TaskReport, reportsMu *sync.Mutex) (*TaskReport, error) {
 	// Get the task
 	task := e.tasks[taskID]
 
 	// Record start time
 	startTime := time.Now()
 
-	// Initialize task report
-	report := &TaskReport{
-		TaskID:    taskID,
-		Status:    TaskStatusPending,
-		StartTime: startTime,
+	// Cascade Skip Check
+	// If any dependency was skipped, this task should also be skipped
+	shouldSkip := false
+	if reports != nil && reportsMu != nil {
+		reportsMu.Lock()
+		for _, depID := range task.dependsOn {
+			if r, ok := reports[depID]; ok {
+				if r.Status == TaskStatusSkipped {
+					shouldSkip = true
+					break
+				}
+			}
+		}
+		reportsMu.Unlock()
 	}
 
-	// Create task context with timeout
+	if shouldSkip {
+		return &TaskReport{
+			TaskID:    taskID,
+			Status:    TaskStatusSkipped,
+			StartTime: startTime,
+			EndTime:   time.Now(),
+			Duration:  0,
+		}, nil
+	}
+
+	// Create task context with timeout early to cover condition check
 	taskCtx := execCtx
 	var cancel context.CancelFunc
 
@@ -548,13 +569,39 @@ func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID
 	}
 	defer cancel()
 
+	// Construct temporary Context for Condition check
+	// We need access to Store to check previous results
+	ctxForCondition := &Context{
+		taskID:      taskID,
+		executionID: executionID,
+		StartTime:   startTime,
+		store:       store,
+		input:       input,
+		// No handlers needed for condition check
+	}
+
+	// Check Condition
+	if task.condition != nil {
+		// Execute condition function
+		shouldRun := task.condition(taskCtx, ctxForCondition)
+		if !shouldRun {
+			return &TaskReport{
+				TaskID:    taskID,
+				Status:    TaskStatusSkipped,
+				StartTime: startTime,
+				EndTime:   time.Now(),
+				Duration:  time.Since(startTime),
+			}, nil
+		}
+	}
+
 	// Build handler chain: global middlewares + task middlewares + handler
 	handlers := make([]HandlerFunc, 0, len(e.middlewares)+len(task.middlewares)+1)
 	handlers = append(handlers, e.middlewares...)
 	handlers = append(handlers, task.middlewares...)
 	handlers = append(handlers, task.handler)
 
-	// Create task Context
+	// Create full task Context
 	ctx := &Context{
 		taskID:      taskID,
 		executionID: executionID,
@@ -570,8 +617,12 @@ func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID
 
 	// Record end time and duration
 	endTime := time.Now()
-	report.EndTime = endTime
-	report.Duration = endTime.Sub(startTime)
+	report := &TaskReport{
+		TaskID:    taskID,
+		StartTime: startTime,
+		EndTime:   endTime,
+		Duration:  endTime.Sub(startTime),
+	}
 
 	// Update status based on execution result
 	if err != nil {

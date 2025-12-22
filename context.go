@@ -53,3 +53,20 @@ func (ctx *Context) TaskID() string {
 func (ctx *Context) Input() any {
 	return ctx.input
 }
+
+// SetTyped writes a strongly-typed value to the Datastore
+func SetTyped[T any](ctx *Context, key Key[T], value T) {
+	ctx.store.Set(key.Name(), value)
+}
+
+// GetTyped retrieves a strongly-typed value from the Datastore
+// It ensures that the retrieved value matches the type T
+func GetTyped[T any](ctx *Context, key Key[T]) (T, bool) {
+	val, ok := ctx.store.Get(key.Name())
+	if !ok {
+		var zero T
+		return zero, false
+	}
+	typedVal, ok := val.(T)
+	return typedVal, ok
+}
