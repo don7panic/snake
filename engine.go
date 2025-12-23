@@ -358,212 +358,281 @@ func (e *Engine) Execute(ctx context.Context, input any) (*ExecutionResult, erro
 	return result, err
 }
 
-// executeParallel schedules and executes tasks in parallel based on their dependencies.
-// It spawns a goroutine for each ready task and manages the execution lifecycle.
-// Returns the aggregated ExecutionResult plus the first observed error (if any).
+// taskResult represents the outcome of a task execution
+type taskResult struct {
+	TaskID string
+	Report *TaskReport
+	Err    error
+}
+
+// executeParallel schedules and executes tasks using a worker pool and event loop.
+// It eliminates lock contention by centralizing state management in the coordinator loop.
 func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj map[string][]string, indegree map[string]int) (*ExecutionResult, error) {
+	// 1. Setup Channels
+	// readyQueue: Buffered to hold task IDs waiting for workers
+	// resultsChan: Buffered to avoid workers blocking when sending results
+	tasksCount := len(e.tasks)
+
+	// Note: readyQueue is already created in Execute
+	resultsChan := make(chan taskResult, tasksCount)
+
+	// 2. Start Workers
+	concurrency := e.maxConcurrency
+	if concurrency <= 0 {
+		concurrency = tasksCount
+	}
+	if concurrency > tasksCount {
+		concurrency = tasksCount
+	}
+
 	var wg sync.WaitGroup
+	// Create a worker context to cancel workers when execution is done
+	workerCtx, workerCancel := context.WithCancel(ctx)
+	defer workerCancel()
+
+	// Start workers
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			e.worker(workerCtx, state, resultsChan)
+		}()
+	}
+
+	// 3. Coordinator Loop (Main Thread)
+	// Manages state: reports, pendingDeps, scheduling
+
 	reports := make(map[string]*TaskReport)
-	var reportsMu sync.Mutex
 
-	var sem chan struct{}
-	if e.maxConcurrency > 0 {
-		sem = make(chan struct{}, e.maxConcurrency)
+	localPendingDeps := make(map[string]int, len(indegree))
+	for k, v := range indegree {
+		localPendingDeps[k] = v
 	}
 
-	// Track the number of tasks that have been scheduled
-	tasksScheduled := &atomic.Int32{}
-	tasksCompleted := &atomic.Int32{}
+	tasksCompleted := 0
+	tasksTotal := tasksCount
 
-	// Count initial zero-indegree tasks
-	initialTasks := int32(0)
-	for _, indegreeCount := range indegree {
-		if indegreeCount == 0 {
-			initialTasks++
-		}
-	}
-	tasksScheduled.Store(initialTasks)
-
-	// Create cancellable context for Fail-Fast error handling
-	execCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	// Track if execution has failed
-	executionFailed := &atomic.Bool{}
 	var firstErr error
-	var firstErrOnce sync.Once
+	var executionFailed bool
 
-	recordErr := func(err error) {
-		if err == nil {
-			return
+	// Helper to push ready tasks
+	pushReady := func(taskIDs ...string) {
+		for _, tid := range taskIDs {
+			select {
+			case state.readyQueue <- tid:
+			default:
+				// Should not happen if buffer is sufficient, but good to handle
+				e.logger.Error(ctx, "ready_queue_full", fmt.Errorf("queue full for task %s", tid))
+			}
 		}
-		firstErrOnce.Do(func() {
-			firstErr = err
-		})
 	}
 
-	// Spawn a goroutine to process tasks from the ready queue
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for taskID := range state.readyQueue {
-			if execCtx.Err() != nil || executionFailed.Load() {
-				reportsMu.Lock()
+coordinatorLoop:
+	// Loop until all tasks are accounted for
+	for tasksCompleted < tasksTotal {
+		select {
+		case res := <-resultsChan:
+			tasksCompleted++
+			reports[res.TaskID] = res.Report
+
+			// Handle Task Success
+			if res.Report.Status == TaskStatusSuccess || res.Report.Status == TaskStatusSkipped {
+				// Decrement dependencies for children
+				for _, dependentID := range adj[res.TaskID] {
+					localPendingDeps[dependentID]--
+					if localPendingDeps[dependentID] == 0 {
+						// Check upstream status for the dependent task
+						depTask := e.tasks[dependentID]
+						var upstreamErr error
+						var upstreamSkipped bool
+
+						for _, parentID := range depTask.dependsOn {
+							parentReport := reports[parentID]
+							if parentReport == nil {
+								continue
+							}
+							if parentReport.Status == TaskStatusFailed || parentReport.Status == TaskStatusCancelled {
+								if !e.tasks[parentID].allowFailure {
+									upstreamErr = fmt.Errorf("upstream task %s failed or cancelled", parentID)
+								}
+							}
+							if parentReport.Status == TaskStatusSkipped {
+								upstreamSkipped = true
+							}
+						}
+
+						if upstreamErr != nil {
+							// Cancel propagation: Send synthetic result
+							resultsChan <- taskResult{
+								TaskID: dependentID,
+								Report: &TaskReport{
+									TaskID:    dependentID,
+									Status:    TaskStatusCancelled,
+									Err:       upstreamErr,
+									StartTime: time.Now(),
+									EndTime:   time.Now(),
+									Duration:  0,
+								},
+							}
+						} else if upstreamSkipped {
+							// Skip propagation: Send synthetic result
+							resultsChan <- taskResult{
+								TaskID: dependentID,
+								Report: &TaskReport{
+									TaskID:    dependentID,
+									Status:    TaskStatusSkipped,
+									StartTime: time.Now(),
+									EndTime:   time.Now(),
+									Duration:  0,
+								},
+							}
+						} else {
+							// Ready to run
+							pushReady(dependentID)
+						}
+					}
+				}
+			} else {
+				// Task Failed or Cancelled
+				if res.Err != nil {
+					if firstErr == nil {
+						firstErr = res.Err
+					}
+
+					// Fail Fast Strategy
+					task := e.tasks[res.TaskID]
+					if e.errorStrategy == FailFast && !task.allowFailure && !executionFailed {
+						executionFailed = true
+						workerCancel() // Stop workers from starting new tasks
+						break coordinatorLoop
+					}
+				}
+
+				// Decrement dependents for failed tasks so they can resolve (and likely cancel)
+				for _, dependentID := range adj[res.TaskID] {
+					localPendingDeps[dependentID]--
+					if localPendingDeps[dependentID] == 0 {
+
+						depTask := e.tasks[dependentID]
+						var upstreamErr error
+
+						for _, parentID := range depTask.dependsOn {
+							parentReport := reports[parentID]
+							if parentReport != nil && (parentReport.Status == TaskStatusFailed || parentReport.Status == TaskStatusCancelled) {
+								if !e.tasks[parentID].allowFailure {
+									upstreamErr = fmt.Errorf("upstream task %s failed or cancelled", parentID)
+								}
+							}
+						}
+
+						if upstreamErr != nil {
+							resultsChan <- taskResult{
+								TaskID: dependentID,
+								Report: &TaskReport{
+									TaskID:    dependentID,
+									Status:    TaskStatusCancelled,
+									Err:       upstreamErr,
+									StartTime: time.Now(),
+									EndTime:   time.Now(),
+									Duration:  0,
+								},
+							}
+						} else {
+							upstreamSkipped := false
+							for _, parentID := range depTask.dependsOn {
+								parentReport := reports[parentID]
+								if parentReport != nil && parentReport.Status == TaskStatusSkipped {
+									upstreamSkipped = true
+								}
+							}
+
+							if upstreamSkipped {
+								resultsChan <- taskResult{
+									TaskID: dependentID,
+									Report: &TaskReport{
+										TaskID:    dependentID,
+										Status:    TaskStatusSkipped,
+										StartTime: time.Now(),
+										EndTime:   time.Now(),
+										Duration:  0,
+									},
+								}
+							} else {
+								pushReady(dependentID)
+							}
+						}
+					}
+				}
+			}
+
+		case <-ctx.Done():
+			// Context Cancelled (Global Timeout or External Cancel)
+			if firstErr == nil {
+				firstErr = ctx.Err()
+			}
+			executionFailed = true
+			workerCancel()
+			break coordinatorLoop
+		}
+	}
+
+	// Close queue to ensure any stuck workers exit
+	close(state.readyQueue)
+	workerCancel()
+
+	// Drain any tasks left in the readyQueue and mark them CANCELLED
+	// This happens after close, so the range will terminate once queue is empty
+	for taskID := range state.readyQueue {
+		resultsChan <- taskResult{
+			TaskID: taskID,
+			Report: &TaskReport{
+				TaskID:    taskID,
+				Status:    TaskStatusCancelled,
+				StartTime: time.Now(),
+				EndTime:   time.Now(),
+				Duration:  0,
+			},
+		}
+	}
+
+	wg.Wait()
+	close(resultsChan)
+
+	// Drain any remaining results from the channel
+	for res := range resultsChan {
+		reports[res.TaskID] = res.Report
+		if res.Err != nil && firstErr == nil {
+			firstErr = res.Err
+		}
+	}
+
+	// Post-processing: Mark missing tasks as Cancelled
+	if executionFailed {
+		for taskID := range e.tasks {
+			if _, exists := reports[taskID]; !exists {
 				reports[taskID] = &TaskReport{
 					TaskID:    taskID,
 					Status:    TaskStatusCancelled,
-					Err:       execCtx.Err(),
 					StartTime: time.Now(),
 					EndTime:   time.Now(),
 					Duration:  0,
 				}
-				reportsMu.Unlock()
-				recordErr(execCtx.Err())
-
-				for _, dependentID := range adj[taskID] {
-					newCount := state.pendingDeps[dependentID].Add(-1)
-					if newCount == 0 {
-						tasksScheduled.Add(1)
-						state.readyQueue <- dependentID
-					}
-				}
-
-				completed := tasksCompleted.Add(1)
-				if completed == tasksScheduled.Load() {
-					close(state.readyQueue)
-				}
-				continue
 			}
-
-			// Increment WaitGroup for this task
-			wg.Add(1)
-
-			if sem != nil {
-				select {
-				case sem <- struct{}{}:
-				case <-execCtx.Done():
-					wg.Done()
-					continue
-				}
-			}
-
-			// Spawn goroutine to execute task
-			go func(tid string) {
-				defer wg.Done()
-				if sem != nil {
-					defer func() { <-sem }()
-				}
-
-				// Resolve dependencies before execution
-				reportsMu.Lock()
-				task := e.tasks[tid]
-				var skipOrCancelReport *TaskReport
-				for _, depID := range task.dependsOn {
-					if depReport, ok := reports[depID]; ok {
-						if depReport.Status == TaskStatusSkipped {
-							// Cascade Skip: if parent skipped, child is skipped
-							skipOrCancelReport = &TaskReport{
-								TaskID:    tid,
-								Status:    TaskStatusSkipped,
-								StartTime: time.Now(),
-								EndTime:   time.Now(),
-								Duration:  0,
-							}
-							break
-						}
-						if depReport.Status == TaskStatusFailed || depReport.Status == TaskStatusCancelled {
-							// Upstream failure
-							depTask := e.tasks[depID]
-							if !depTask.allowFailure {
-								// Parent failed and failure is not allowed -> Cancel self
-								skipOrCancelReport = &TaskReport{
-									TaskID:    tid,
-									Status:    TaskStatusCancelled,
-									Err:       fmt.Errorf("upstream task %s failed or cancelled", depID),
-									StartTime: time.Now(),
-									EndTime:   time.Now(),
-									Duration:  0,
-								}
-								break
-							}
-							// If parent allowFailure=true, we continue execution!
-						}
-					}
-				}
-				reportsMu.Unlock()
-
-				var report *TaskReport
-				var taskErr error
-
-				if skipOrCancelReport != nil {
-					report = skipOrCancelReport
-					taskErr = nil // Skipped/Cancelled is not an execution error for the engine loop
-				} else {
-					// safe to run
-					report, taskErr = e.executeTask(execCtx, tid, state.executionID, state.store, state.input)
-				}
-
-				// Store the report
-				reportsMu.Lock()
-				reports[tid] = report
-				reportsMu.Unlock()
-
-				recordErr(taskErr)
-
-				// Check if task failed and trigger Fail-Fast
-				if taskErr != nil {
-					task := e.tasks[tid]
-					// Only trigger global cancel if strategy is FailFast AND task is critical (not AllowFailure)
-					if e.errorStrategy == FailFast && !task.allowFailure {
-						// Mark execution as failed
-						executionFailed.Store(true)
-						// Cancel execution context to signal all other tasks
-						cancel()
-					}
-				}
-
-				// On task completion (Success, Failed, Skipped, Cancelled), process dependents
-				// Even if Cancelled/Skipped, we must decrement dependents so they can be processed (and likely Cascaded)
-				for _, dependentID := range adj[tid] {
-					// Atomically decrement pendingDeps for this dependent
-					newCount := state.pendingDeps[dependentID].Add(-1)
-
-					// If pending count reaches zero, add to ready queue
-					if newCount == 0 {
-						tasksScheduled.Add(1)
-						state.readyQueue <- dependentID
-					}
-				}
-
-				// Mark this task as completed
-				completed := tasksCompleted.Add(1)
-
-				// If all scheduled tasks are completed, close the queue
-				if completed == tasksScheduled.Load() {
-					close(state.readyQueue)
-				}
-			}(taskID)
 		}
-	}()
+	}
 
-	// Wait for all tasks to complete
-	wg.Wait()
-
-	// Wait for the processing goroutine to finish
-	<-done
-
-	// Determine overall success
+	// Determine success
 	success := true
-	for _, report := range reports {
-		// Skipped tasks are not considered failures
-		if report.Status != TaskStatusSuccess && report.Status != TaskStatusSkipped {
-			// If AllowFailure is enabled for a failed task, it shouldn't fail the workflow success status?
-			// Usually workflow success implies "all critical tasks succeeded"
-			// Let's check AllowFailure of the task
-			task := e.tasks[report.TaskID]
-			if !task.allowFailure {
-				success = false
-				break
+	if executionFailed {
+		success = false
+	} else {
+		for _, report := range reports {
+			if report.Status == TaskStatusFailed || report.Status == TaskStatusCancelled {
+				task := e.tasks[report.TaskID]
+				if !task.allowFailure {
+					success = false
+					break
+				}
 			}
 		}
 	}
@@ -575,13 +644,49 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 		Store:       state.store,
 	}
 
-	// Pick first error if any task failed/cancelled
-	var execErr error
-	if firstErr != nil {
-		execErr = firstErr
-	}
+	return result, firstErr
+}
 
-	return result, execErr
+// worker constantly consumes tasks from the ready queue and executes them
+func (e *Engine) worker(ctx context.Context, state *executionState, resultsChan chan<- taskResult) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case taskID, ok := <-state.readyQueue:
+			if !ok {
+				return
+			}
+			// Double-check context after dequeue to avoid executing tasks post-cancellation
+			if ctx.Err() != nil {
+				// Context already cancelled, send a synthetic cancelled result
+				resultsChan <- taskResult{
+					TaskID: taskID,
+					Report: &TaskReport{
+						TaskID:    taskID,
+						Status:    TaskStatusCancelled,
+						Err:       ctx.Err(),
+						StartTime: time.Now(),
+						EndTime:   time.Now(),
+						Duration:  0,
+					},
+					Err: ctx.Err(),
+				}
+				continue
+			}
+			e.executeTaskAndReport(ctx, taskID, state, resultsChan)
+		}
+	}
+}
+
+func (e *Engine) executeTaskAndReport(ctx context.Context, taskID string, state *executionState, resultsChan chan<- taskResult) {
+	report, err := e.executeTask(ctx, taskID, state.executionID, state.store, state.input)
+
+	resultsChan <- taskResult{
+		TaskID: taskID,
+		Report: report,
+		Err:    err,
+	}
 }
 
 // executeTask executes a single task with proper context, timeout, and middleware chain

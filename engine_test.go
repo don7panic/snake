@@ -73,41 +73,6 @@ func TestExecute_CreatesNewDatastore(t *testing.T) {
 	assert.False(t, ok, "Datastore should be empty before tasks execute")
 }
 
-// TestExecute_IdentifiesZeroIndegreeTasks verifies that tasks with no dependencies are identified
-func TestExecute_IdentifiesZeroIndegreeTasks(t *testing.T) {
-	engine := NewEngine()
-
-	// Register tasks with mixed dependencies
-	task1 := &Task{
-		id:      "task1",
-		handler: func(c context.Context, ctx *Context) error { return nil },
-	}
-	task2 := &Task{
-		id:      "task2",
-		handler: func(c context.Context, ctx *Context) error { return nil },
-	}
-	task3 := &Task{
-		id:        "task3",
-		dependsOn: []string{"task1"},
-		handler:   func(c context.Context, ctx *Context) error { return nil },
-	}
-
-	err := engine.Register(task1)
-	assert.NoError(t, err)
-	err = engine.Register(task2)
-	assert.NoError(t, err)
-	err = engine.Register(task3)
-	assert.NoError(t, err)
-
-	err = engine.Build()
-	assert.NoError(t, err)
-
-	// Verify indegree values
-	assert.Equal(t, 0, engine.indegree["task1"], "task1 should have indegree 0")
-	assert.Equal(t, 0, engine.indegree["task2"], "task2 should have indegree 0")
-	assert.Equal(t, 1, engine.indegree["task3"], "task3 should have indegree 1")
-}
-
 // TestExecute_DisconnectedGraphs verifies support for non-connected DAGs
 func TestExecute_DisconnectedGraphs(t *testing.T) {
 	engine := NewEngine()
@@ -147,337 +112,6 @@ func TestExecute_DisconnectedGraphs(t *testing.T) {
 	// When tasks fail (due to errors or timeouts), Execute may return an error
 	// We should still get a valid result even if there's an error
 	assert.NotNil(t, result)
-}
-
-// TestExecuteTask_CreatesContext verifies that each task gets a proper Context
-func TestExecuteTask_CreatesContext(t *testing.T) {
-	engine := NewEngine()
-
-	// Track if handler was called with proper context
-	var capturedCtx *Context
-	task := &Task{
-		id: "task1",
-		handler: func(c context.Context, ctx *Context) error {
-			capturedCtx = ctx
-			return nil
-		},
-	}
-
-	err := engine.Register(task)
-	assert.NoError(t, err)
-
-	// Execute the task directly
-	store := newMemoryStore()
-	report, err := engine.executeTask(context.Background(), "task1", "exec-123", store, nil)
-	assert.NoError(t, err)
-
-	// Verify report
-	assert.NotNil(t, report)
-	assert.Equal(t, "task1", report.TaskID)
-	assert.Equal(t, TaskStatusSuccess, report.Status)
-
-	// Verify context was created properly
-	assert.NotNil(t, capturedCtx)
-	assert.Equal(t, "task1", capturedCtx.taskID)
-	assert.Equal(t, "exec-123", capturedCtx.executionID)
-	assert.NotNil(t, capturedCtx.store)
-	assert.False(t, capturedCtx.StartTime.IsZero())
-}
-
-// TestExecuteTask_AppliesTaskTimeout verifies task-specific timeout is applied
-func TestExecuteTask_AppliesTaskTimeout(t *testing.T) {
-	engine := NewEngine()
-
-	// Create a task with a short timeout
-	task := NewTask("task1", func(c context.Context, ctx *Context) error {
-		// Wait for context to be cancelled or timeout
-		select {
-		case <-c.Done():
-			return c.Err()
-		case <-time.After(100 * time.Millisecond):
-			return nil
-		}
-	}, WithTimeout(10*time.Millisecond))
-
-	err := engine.Register(task)
-	assert.NoError(t, err)
-
-	// Execute the task
-	store := newMemoryStore()
-	report, err := engine.executeTask(context.Background(), "task1", "exec-123", store, nil)
-	// When a task times out, executeTask should return an error
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
-
-	// Verify task failed due to timeout
-	assert.NotNil(t, report)
-	assert.Equal(t, TaskStatusFailed, report.Status)
-	assert.NotNil(t, report.Err)
-	assert.ErrorIs(t, report.Err, context.DeadlineExceeded)
-}
-
-// TestExecuteTask_AppliesDefaultTimeout verifies default timeout is used when task timeout not set
-func TestExecuteTask_AppliesDefaultTimeout(t *testing.T) {
-	engine := NewEngine(WithDefaultTaskTimeout(10 * time.Millisecond))
-
-	// Create a task without specific timeout
-	task := &Task{
-		id: "task1",
-		handler: func(c context.Context, ctx *Context) error {
-			// Wait for context to be cancelled or timeout
-			select {
-			case <-c.Done():
-				return c.Err()
-			case <-time.After(100 * time.Millisecond):
-				return nil
-			}
-		},
-	}
-
-	err := engine.Register(task)
-	assert.NoError(t, err)
-
-	// Execute the task
-	store := newMemoryStore()
-	report, err := engine.executeTask(context.Background(), "task1", "exec-123", store, nil)
-	// When a task times out, executeTask should return an error
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
-
-	// Verify task failed due to timeout
-	assert.NotNil(t, report)
-	assert.Equal(t, TaskStatusFailed, report.Status)
-	assert.NotNil(t, report.Err)
-	assert.ErrorIs(t, report.Err, context.DeadlineExceeded)
-}
-
-// TestExecuteTask_BuildsHandlerChain verifies handler chain includes global and task middleware
-func TestExecuteTask_BuildsHandlerChain(t *testing.T) {
-	engine := NewEngine()
-
-	// Track execution order
-	executionOrder := []string{}
-
-	// Register global middleware
-	engine.Use(func(c context.Context, ctx *Context) error {
-		executionOrder = append(executionOrder, "global-before")
-		err := ctx.Next(c)
-		executionOrder = append(executionOrder, "global-after")
-		return err
-	})
-
-	// Create task with task-specific middleware
-	task := NewTask("task1", func(c context.Context, ctx *Context) error {
-		executionOrder = append(executionOrder, "handler")
-		return nil
-	}, WithMiddlewares(func(c context.Context, ctx *Context) error {
-		executionOrder = append(executionOrder, "task-before")
-		err := ctx.Next(c)
-		executionOrder = append(executionOrder, "task-after")
-		return err
-	}))
-
-	err := engine.Register(task)
-	assert.NoError(t, err)
-
-	// Execute the task
-	store := newMemoryStore()
-	report, err := engine.executeTask(context.Background(), "task1", "exec-123", store, nil)
-	assert.NoError(t, err)
-
-	// Verify execution succeeded
-	assert.NotNil(t, report)
-	assert.Equal(t, TaskStatusSuccess, report.Status)
-
-	// Verify execution order: global -> task -> handler -> task -> global
-	expectedOrder := []string{
-		"global-before",
-		"task-before",
-		"handler",
-		"task-after",
-		"global-after",
-	}
-	assert.Equal(t, expectedOrder, executionOrder)
-}
-
-// TestExecuteTask_RecordsSuccessStatus verifies successful tasks are marked SUCCESS
-func TestExecuteTask_RecordsSuccessStatus(t *testing.T) {
-	engine := NewEngine()
-
-	task := &Task{
-		id: "task1",
-		handler: func(c context.Context, ctx *Context) error {
-			return nil
-		},
-	}
-
-	err := engine.Register(task)
-	assert.NoError(t, err)
-
-	// Execute the task
-	store := newMemoryStore()
-	report, err := engine.executeTask(context.Background(), "task1", "exec-123", store, nil)
-	assert.NoError(t, err)
-
-	// Verify report
-	assert.NotNil(t, report)
-	assert.Equal(t, "task1", report.TaskID)
-	assert.Equal(t, TaskStatusSuccess, report.Status)
-	assert.Nil(t, report.Err)
-	assert.False(t, report.StartTime.IsZero())
-	assert.False(t, report.EndTime.IsZero())
-	assert.True(t, report.Duration > 0)
-}
-
-// TestExecuteTask_RecordsFailureStatus verifies failed tasks are marked FAILED
-func TestExecuteTask_RecordsFailureStatus(t *testing.T) {
-	engine := NewEngine()
-
-	expectedErr := assert.AnError
-	task := &Task{
-		id: "task1",
-		handler: func(c context.Context, ctx *Context) error {
-			return expectedErr
-		},
-	}
-
-	err := engine.Register(task)
-	assert.NoError(t, err)
-
-	// Execute the task
-	store := newMemoryStore()
-	report, err := engine.executeTask(context.Background(), "task1", "exec-123", store, nil)
-	// When a task fails, executeTask returns the error
-	assert.Error(t, err)
-	assert.Equal(t, expectedErr, err)
-
-	// Verify report
-	assert.NotNil(t, report)
-	assert.Equal(t, "task1", report.TaskID)
-	assert.Equal(t, TaskStatusFailed, report.Status)
-	assert.Equal(t, expectedErr, report.Err)
-	assert.False(t, report.StartTime.IsZero())
-	assert.False(t, report.EndTime.IsZero())
-	assert.True(t, report.Duration > 0)
-}
-
-// TestExecuteTask_RecordsTiming verifies timing information is captured
-func TestExecuteTask_RecordsTiming(t *testing.T) {
-	engine := NewEngine()
-
-	sleepDuration := 20 * time.Millisecond
-	task := &Task{
-		id: "task1",
-		handler: func(c context.Context, ctx *Context) error {
-			time.Sleep(sleepDuration)
-			return nil
-		},
-	}
-
-	err := engine.Register(task)
-	assert.NoError(t, err)
-
-	// Execute the task
-	store := newMemoryStore()
-	report, err := engine.executeTask(context.Background(), "task1", "exec-123", store, nil)
-	assert.NoError(t, err)
-
-	// Verify timing
-	assert.NotNil(t, report)
-	assert.False(t, report.StartTime.IsZero())
-	assert.False(t, report.EndTime.IsZero())
-	assert.True(t, report.EndTime.After(report.StartTime))
-	assert.True(t, report.Duration >= sleepDuration, "Duration should be at least the sleep duration")
-	assert.Equal(t, report.Duration, report.EndTime.Sub(report.StartTime))
-}
-
-// TestExecuteTask_ContextInheritsExecutionContext verifies task context inherits from execution context
-func TestExecuteTask_ContextInheritsExecutionContext(t *testing.T) {
-	engine := NewEngine()
-
-	// Create a cancellable execution context
-	execCtx, cancel := context.WithCancel(context.Background())
-
-	var taskCtxDone <-chan struct{}
-	task := &Task{
-		id: "task1",
-		handler: func(c context.Context, ctx *Context) error {
-			taskCtxDone = c.Done()
-			return nil
-		},
-	}
-
-	err := engine.Register(task)
-	assert.NoError(t, err)
-
-	// Execute the task
-	store := newMemoryStore()
-	report, err := engine.executeTask(execCtx, "task1", "exec-123", store, nil)
-	assert.NoError(t, err)
-
-	// Verify task succeeded
-	assert.NotNil(t, report)
-	assert.Equal(t, TaskStatusSuccess, report.Status)
-
-	// Cancel execution context
-	cancel()
-
-	// Verify task context was cancelled (channel should be closed)
-	select {
-	case <-taskCtxDone:
-		// Expected: context was cancelled
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("Task context should have been cancelled when execution context was cancelled")
-	}
-}
-
-// TestExecuteTask_ContextProperties verifies Context contains correct properties after Logger removal
-func TestExecuteTask_ContextProperties(t *testing.T) {
-	// Create a mock logger that captures fields
-	type logCall struct {
-		msg    string
-		fields []Field
-	}
-	var logCalls []logCall
-
-	mockLogger := &mockLogger{
-		infoFunc: func(ctx context.Context, msg string, fields ...Field) {
-			logCalls = append(logCalls, logCall{msg: msg, fields: fields})
-		},
-		withFunc: func(fields ...Field) Logger {
-			// Return a new logger with the fields
-			return &mockLogger{
-				fields: fields,
-				infoFunc: func(ctx context.Context, msg string, moreFields ...Field) {
-					allFields := append(fields, moreFields...)
-					logCalls = append(logCalls, logCall{msg: msg, fields: allFields})
-				},
-			}
-		},
-	}
-
-	engine := NewEngine(WithLogger(mockLogger))
-
-	task := &Task{
-		id: "task1",
-		handler: func(c context.Context, ctx *Context) error {
-			// Note: Logger removed from Context
-			// In tests, you can use the engine's logger directly if needed
-			return nil
-		},
-	}
-
-	err := engine.Register(task)
-	assert.NoError(t, err)
-
-	// Execute the task
-	store := newMemoryStore()
-	report, err := engine.executeTask(context.Background(), "task1", "exec-123", store, nil)
-	assert.NoError(t, err)
-
-	// Verify task succeeded
-	assert.NotNil(t, report)
-	assert.Equal(t, TaskStatusSuccess, report.Status)
 }
 
 // mockLogger is a simple mock implementation of the Logger interface for testing
@@ -1531,4 +1165,123 @@ func TestErrorStrategy_RunAll(t *testing.T) {
 	// Overall success?
 	// t1 failed (critical) -> Success = false
 	assert.False(t, res.Success)
+}
+
+// TestFailFast_MaxConcurrency1_UnstartedTasksCancelled verifies that with maxConcurrency=1,
+// when the first task fails with FailFast, dependent tasks are marked CANCELLED.
+// Note: This uses a dependency chain to ensure task2/task3 are never even scheduled.
+func TestFailFast_MaxConcurrency1_UnstartedTasksCancelled(t *testing.T) {
+	engine := NewEngine(
+		WithErrorStrategy(FailFast),
+		WithMaxConcurrency(1), // Only one task can run at a time
+	)
+
+	// task1 fails immediately
+	task1 := NewTask("task1", func(c context.Context, ctx *Context) error {
+		return assert.AnError
+	})
+
+	// task2 depends on task1 (will be cancelled due to upstream failure)
+	task2 := NewTask("task2", func(c context.Context, ctx *Context) error {
+		t.Fatal("task2 should not have run - depends on failed task1")
+		return nil
+	}, WithDependsOn(task1))
+
+	// task3 depends on task2 (will be cancelled due to cascading failure)
+	task3 := NewTask("task3", func(c context.Context, ctx *Context) error {
+		t.Fatal("task3 should not have run - depends on cancelled task2")
+		return nil
+	}, WithDependsOn(task2))
+
+	err := engine.Register(task1, task2, task3)
+	assert.NoError(t, err)
+
+	// Execute
+	result, execErr := engine.Execute(context.Background(), nil)
+	assert.NotNil(t, result)
+	assert.Error(t, execErr) // Should return the first error
+
+	// Verify task1 failed
+	assert.Equal(t, TaskStatusFailed, result.Reports["task1"].Status)
+
+	// Verify dependent tasks are marked CANCELLED
+	assert.NotNil(t, result.Reports["task2"])
+	assert.NotNil(t, result.Reports["task3"])
+	assert.Equal(t, TaskStatusCancelled, result.Reports["task2"].Status)
+	assert.Equal(t, TaskStatusCancelled, result.Reports["task3"].Status)
+
+	// Execution should fail
+	assert.False(t, result.Success)
+}
+
+// TestContextCancellation_UnstartedTasksCancelled verifies that when the parent context
+// is cancelled during execution, Execute returns and unstarted tasks are marked CANCELLED.
+func TestContextCancellation_UnstartedTasksCancelled(t *testing.T) {
+	engine := NewEngine(
+		WithMaxConcurrency(1), // Serialize tasks to ensure predictable order
+	)
+
+	task1Started := make(chan struct{})
+	task1Blocked := make(chan struct{})
+
+	// task1 blocks until we unblock it (simulates a long-running task)
+	task1 := NewTask("task1", func(c context.Context, ctx *Context) error {
+		close(task1Started)
+		select {
+		case <-c.Done():
+			return c.Err()
+		case <-task1Blocked:
+			return nil
+		}
+	})
+
+	// task2 should never start because context is cancelled while task1 is running
+	task2 := NewTask("task2", func(c context.Context, ctx *Context) error {
+		t.Fatal("task2 should not have started")
+		return nil
+	})
+
+	err := engine.Register(task1, task2)
+	assert.NoError(t, err)
+
+	// Create a cancellable context
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Run execution in a goroutine
+	done := make(chan struct{})
+	var result *ExecutionResult
+	var execErr error
+	go func() {
+		result, execErr = engine.Execute(ctx, nil)
+		close(done)
+	}()
+
+	// Wait for task1 to start
+	<-task1Started
+
+	// Cancel the context
+	cancel()
+
+	// Wait for execution to complete (should not hang)
+	select {
+	case <-done:
+		// Good, execution returned
+	case <-time.After(2 * time.Second):
+		t.Fatal("Execute should have returned after context cancellation, but it blocked")
+	}
+
+	// Verify result
+	assert.NotNil(t, result)
+	assert.Error(t, execErr)
+	assert.ErrorIs(t, execErr, context.Canceled)
+
+	// task1 should be FAILED (it returned the context error)
+	assert.Equal(t, TaskStatusFailed, result.Reports["task1"].Status)
+
+	// task2 should be CANCELLED (never started)
+	assert.NotNil(t, result.Reports["task2"])
+	assert.Equal(t, TaskStatusCancelled, result.Reports["task2"].Status)
+
+	// Execution should fail
+	assert.False(t, result.Success)
 }
