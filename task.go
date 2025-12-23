@@ -48,9 +48,13 @@ func NewTask(id string, handler HandlerFunc, options ...TaskOption) *Task {
 }
 
 // WithDependsOn sets the dependencies for a task
-func WithDependsOn(deps ...string) TaskOption {
+func WithDependsOn(deps ...*Task) TaskOption {
 	return func(t *Task) {
-		t.dependsOn = deps
+		for _, dep := range deps {
+			if dep != nil {
+				t.dependsOn = append(t.dependsOn, dep.id)
+			}
+		}
 	}
 }
 

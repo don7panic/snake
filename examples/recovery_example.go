@@ -28,20 +28,20 @@ func DemoRecoveryMiddleware() {
 	task2 := snake.NewTask("task2", func(c context.Context, ctx *snake.Context) error {
 		fmt.Printf("[%s] Task 2 about to panic\n", ctx.TaskID())
 		panic("something went wrong!")
-	}, snake.WithDependsOn("task1"))
+	}, snake.WithDependsOn(task1))
 
 	// Task 3: A task that panics with an error
 	task3 := snake.NewTask("task3", func(c context.Context, ctx *snake.Context) error {
 		fmt.Printf("[%s] Task 3 about to panic with error\n", ctx.TaskID())
 		panic(fmt.Errorf("critical error occurred"))
-	}, snake.WithDependsOn("task1"))
+	}, snake.WithDependsOn(task1))
 
 	// Task 4: A task that would run after task2, but will be skipped due to panic
 	task4 := snake.NewTask("task4", func(c context.Context, ctx *snake.Context) error {
 		fmt.Printf("[%s] Task 4 executing\n", ctx.TaskID())
 		ctx.SetResult("task4", "task4 completed")
 		return nil
-	}, snake.WithDependsOn("task2"))
+	}, snake.WithDependsOn(task2))
 
 	// Register all tasks in a batch
 	err := engine.Register(task1, task2, task3, task4)
@@ -98,7 +98,7 @@ func DemoTaskSpecificRecovery() {
 		// Simulate some risky operation that might panic
 		panic("unexpected panic in risky operation")
 	},
-		snake.WithDependsOn("safe-task"),
+		snake.WithDependsOn(task1),
 		snake.WithMiddlewares(RecoveryMiddleware()), // Recovery only for this task
 	)
 
@@ -107,7 +107,7 @@ func DemoTaskSpecificRecovery() {
 		fmt.Printf("[%s] Another safe task executing\n", ctx.TaskID())
 		// This task would be skipped due to task2 failure in Fail-Fast mode
 		return nil
-	}, snake.WithDependsOn("risky-task"))
+	}, snake.WithDependsOn(task2))
 
 	// Register tasks
 	err := engine.Register(task1, task2, task3)
@@ -153,7 +153,7 @@ func DemoRecoveryWithTimeout() {
 		// This would normally timeout, but let's make it panic first
 		time.Sleep(100 * time.Millisecond)
 		panic("panic in slow task")
-	}, snake.WithDependsOn("panic-task"))
+	}, snake.WithDependsOn(task1))
 
 	engine.Use(RecoveryMiddleware())
 	err := engine.Register(task1, task2)

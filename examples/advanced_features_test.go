@@ -34,7 +34,7 @@ func TestAdvancedFeatures(t *testing.T) {
 		ctx.SetResult("processed_high", true)
 		return nil
 	},
-		snake.WithDependsOn("analyze"),
+		snake.WithDependsOn(taskA),
 		snake.WithCondition(func(c context.Context, ctx *snake.Context) bool {
 			score, ok := snake.GetTyped(ctx, OrderScoreKey)
 			return ok && score > 80
@@ -46,7 +46,7 @@ func TestAdvancedFeatures(t *testing.T) {
 		t.Error("Task C should have been skipped!")
 		return nil
 	},
-		snake.WithDependsOn("analyze"),
+		snake.WithDependsOn(taskA),
 		snake.WithCondition(func(c context.Context, ctx *snake.Context) bool {
 			score, ok := snake.GetTyped(ctx, OrderScoreKey)
 			return ok && score <= 80
@@ -57,7 +57,7 @@ func TestAdvancedFeatures(t *testing.T) {
 	taskD := snake.NewTask("notify_low_value", func(c context.Context, ctx *snake.Context) error {
 		t.Error("Task D should have been cascade skipped!")
 		return nil
-	}, snake.WithDependsOn("process_low_value"))
+	}, snake.WithDependsOn(taskC))
 
 	err := engine.Register(taskA, taskB, taskC, taskD)
 	require.NoError(t, err)

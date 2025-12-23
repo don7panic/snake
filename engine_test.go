@@ -118,7 +118,7 @@ func TestExecute_DisconnectedGraphs(t *testing.T) {
 		id:      "task1",
 		handler: func(c context.Context, ctx *Context) error { return nil },
 	}
-	task2 := NewTask("task2", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task1"))
+	task2 := NewTask("task2", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn(task1))
 
 	// Subgraph 2: task3 -> task4
 	task3 := &Task{
@@ -1230,9 +1230,9 @@ func TestTopologicalSort_ComplexDependencies(t *testing.T) {
 	//    \     /
 	//    task4
 	task1 := NewTask("task1", func(c context.Context, ctx *Context) error { return nil })
-	task2 := NewTask("task2", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task1"))
-	task3 := NewTask("task3", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task1"))
-	task4 := NewTask("task4", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task2", "task3"))
+	task2 := NewTask("task2", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn(task1))
+	task3 := NewTask("task3", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn(task1))
+	task4 := NewTask("task4", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn(task2, task3))
 
 	err := engine.Register(task1, task2, task3, task4)
 	assert.NoError(t, err)
@@ -1277,7 +1277,7 @@ func TestTopologicalSort_DisconnectedGraphs(t *testing.T) {
 	// Create disconnected tasks
 	taskA := NewTask("taskA", func(c context.Context, ctx *Context) error { return nil })
 	taskB := NewTask("taskB", func(c context.Context, ctx *Context) error { return nil })
-	taskC := NewTask("taskC", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("taskA"))
+	taskC := NewTask("taskC", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn(taskA))
 
 	err := engine.Register(taskA, taskB, taskC)
 	assert.NoError(t, err)
@@ -1303,9 +1303,12 @@ func TestTopologicalSort_CycleDetection(t *testing.T) {
 	engine := NewEngine()
 
 	// Create tasks with a cycle: task1 -> task2 -> task3 -> task1
-	task1 := NewTask("task1", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task3"))
-	task2 := NewTask("task2", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task1"))
-	task3 := NewTask("task3", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn("task2"))
+	task1 := NewTask("task1", func(c context.Context, ctx *Context) error { return nil })
+	task2 := NewTask("task2", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn(task1))
+	task3 := NewTask("task3", func(c context.Context, ctx *Context) error { return nil }, WithDependsOn(task2))
+
+	// Apply cyclic dependency manually
+	WithDependsOn(task3)(task1)
 
 	err := engine.Register(task1, task2, task3)
 	assert.NoError(t, err)
@@ -1379,7 +1382,7 @@ func TestExecuteTask_InputAccessibilityMultipleTasks(t *testing.T) {
 		accessedTasks["task2"] = input.Value
 		mu.Unlock()
 		return nil
-	}, WithDependsOn("task1"))
+	}, WithDependsOn(task1))
 
 	task3 := NewTask("task3", func(c context.Context, ctx *Context) error {
 		input := ctx.Input().(*WorkflowInput)
@@ -1387,7 +1390,7 @@ func TestExecuteTask_InputAccessibilityMultipleTasks(t *testing.T) {
 		accessedTasks["task3"] = input.Value
 		mu.Unlock()
 		return nil
-	}, WithDependsOn("task2"))
+	}, WithDependsOn(task2))
 
 	err := engine.Register(task1, task2, task3)
 	assert.NoError(t, err)
@@ -1494,7 +1497,7 @@ func TestErrorStrategy_RunAll(t *testing.T) {
 	// t3 depends on t1 (should be CANCELLED due to upstream failure)
 	t3 := NewTask("t3", func(c context.Context, ctx *Context) error {
 		return nil
-	}, WithDependsOn("t1"))
+	}, WithDependsOn(t1))
 
 	// t1_allowed fails but has AllowFailure=true
 	t1_allowed := NewTask("t1_allow", func(c context.Context, ctx *Context) error {
@@ -1504,7 +1507,7 @@ func TestErrorStrategy_RunAll(t *testing.T) {
 	// t5 depends on t1_allow (should run because parent failure is allowed)
 	t5_dep_allowed := NewTask("t5", func(c context.Context, ctx *Context) error {
 		return nil
-	}, WithDependsOn("t1_allow"))
+	}, WithDependsOn(t1_allowed))
 
 	engine.Register(t1, t2, t3, t1_allowed, t5_dep_allowed)
 

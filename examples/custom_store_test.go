@@ -91,7 +91,7 @@ func TestStronglyTypedStore(t *testing.T) {
 		ctx.SetResult("user", &User{Name: user.Name, Age: user.Age + 1})
 		ctx.SetResult("status", "updated")
 		return nil
-	}, snake.WithDependsOn("task1"))
+	}, snake.WithDependsOn(task1))
 
 	task3 := snake.NewTask("task3", func(c context.Context, ctx *snake.Context) error {
 		rawUser, ok := ctx.GetResult("user")
@@ -104,7 +104,7 @@ func TestStronglyTypedStore(t *testing.T) {
 		assert.True(t, ok)
 		assert.Equal(t, "updated", rawStatus)
 		return nil
-	}, snake.WithDependsOn("task2"))
+	}, snake.WithDependsOn(task2))
 
 	assert.NoError(t, engine.Register(task1, task2, task3))
 	assert.NoError(t, engine.Build())

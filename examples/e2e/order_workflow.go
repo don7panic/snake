@@ -140,7 +140,7 @@ func (s *OrderService) Pay(req *OrderRequest) error {
 			}
 			ctx.SetResult("customerProfile", "ok")
 			return nil
-		}, snake.WithDependsOn("validate"))
+		}, snake.WithDependsOn(validate))
 
 		inventory := snake.NewTask("inventory", func(c context.Context, ctx *snake.Context) error {
 			// Get input from Context instead of closure capture
@@ -153,7 +153,7 @@ func (s *OrderService) Pay(req *OrderRequest) error {
 			}
 			ctx.SetResult("inventory", "reserved")
 			return nil
-		}, snake.WithDependsOn("validate"))
+		}, snake.WithDependsOn(validate))
 
 		price := snake.NewTask("price", func(c context.Context, ctx *snake.Context) error {
 			// Get input from Context instead of closure capture
@@ -167,7 +167,7 @@ func (s *OrderService) Pay(req *OrderRequest) error {
 			}
 			ctx.SetResult("price", priceVal)
 			return nil
-		}, snake.WithDependsOn("inventory", "customerProfile"))
+		}, snake.WithDependsOn(inventory, customerProfile))
 
 		charge := snake.NewTask("charge", func(c context.Context, ctx *snake.Context) error {
 			priceVal, ok := ctx.GetResult("price")
@@ -185,7 +185,7 @@ func (s *OrderService) Pay(req *OrderRequest) error {
 			}
 			ctx.SetResult("charge", chargeVal)
 			return nil
-		}, snake.WithDependsOn("price"))
+		}, snake.WithDependsOn(price))
 		if err := orderEngine.Register(
 			validate,
 			customerProfile,
