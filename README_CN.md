@@ -62,12 +62,12 @@ func main() {
         return nil
     })
 
-    b := snake.NewTask("B", func(c context.Context, ctx *snake.Context) error {
-        // 读取上游任务结果
-        v, _ := ctx.GetResult("A")
-        ctx.SetResult("B", fmt.Sprintf("b got %v", v))
-        return nil
-    }, snake.WithDependsOn("A"))
+	b := snake.NewTask("B", func(c context.Context, ctx *snake.Context) error {
+		// 读取上游任务结果
+		v, _ := ctx.GetResult("A")
+		ctx.SetResult("B", fmt.Sprintf("b got %v", v))
+		return nil
+	}, snake.WithDependsOn(a))
 
     if err := engine.Register(a, b); err != nil {
         panic(err)
@@ -116,7 +116,56 @@ func main() {
 - Handler 通过 `ctx.Input()` 访问本次执行传入的输入参数（视为只读引用，避免在并行任务中原地修改），需要进行类型断言；如需变更请先拷贝。
 - 遇到第一个任务失败（或超时）且策略为 FailFast 时触发全局取消，未开始的任务标记为 `CANCELLED`。
 - 如果策略为 `RunAll`，则失败任务仅影响其下游依赖，其他独立分支继续运行。
+- 如果策略为 `RunAll`，则失败任务仅影响其下游依赖，其他独立分支继续运行。
 - 如果任务标记为 `WithAllowFailure(true)`，即使失败也会被视为“已处理”，下游任务视逻辑决定是否运行。
+
+## 高级特性
+
+### 条件执行
+
+使用 `WithCondition` 根据运行时条件跳过任务。
+
+```go
+check := snake.NewTask("check", func(c context.Context, ctx *snake.Context) error {
+    // ... 业务逻辑 ...
+    return nil
+}, snake.WithCondition(func(c context.Context, ctx *snake.Context) bool {
+    // 返回 true 执行任务，false 跳过
+    return shouldRun()
+}))
+```
+
+被跳过的任务状态为 `SKIPPED`。下游依赖任务通常仍会运行，除非它们强依赖于被跳过任务的输出。
+
+### 并发控制
+
+使用 `WithMaxConcurrency` 限制并行执行的任务数量。
+
+```go
+engine := snake.NewEngine(
+    snake.WithMaxConcurrency(5), // 最多同时运行 5 个任务
+)
+```
+
+### 中间件与恢复
+
+Snake 支持类似 Web 框架的中间件链。常见场景是 Panic 恢复。
+
+```go
+// 添加 Recovery 中间件以安全处理任务中的恐慌
+engine.Use(snake.Recovery())
+```
+
+### 任务选项
+
+`NewTask` 的完整选项列表：
+
+- `WithDependsOn(tasks ...*Task)`: 声明上游依赖。
+- `WithTimeout(d time.Duration)`: 设置任务级硬超时。
+- `WithCondition(fn ConditionFunc)`: 动态跳过逻辑。
+- `WithAllowFailure(allow bool)`: 如果为 true，即使失败也不会触发 FailFast 取消。
+- `WithMiddlewares(m ...HandlerFunc)`: 添加任务级中间件。
+
 
 ## 观察与排障
 

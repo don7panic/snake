@@ -61,11 +61,11 @@ func main() {
         return nil
     })
 
-    b := snake.NewTask("B", func(c context.Context, ctx *snake.Context) error {
-        v, _ := ctx.GetResult("A") // read upstream result
-        ctx.SetResult("B", fmt.Sprintf("b got %v", v))
-        return nil
-    }, snake.WithDependsOn("A"))
+	b := snake.NewTask("B", func(c context.Context, ctx *snake.Context) error {
+		v, _ := ctx.GetResult("A") // read upstream result
+		ctx.SetResult("B", fmt.Sprintf("b got %v", v))
+		return nil
+	}, snake.WithDependsOn(a))
 
     if err := engine.Register(a, b); err != nil {
         panic(err)
@@ -108,6 +108,54 @@ func main() {
 - `Error Handling`: `WithErrorStrategy(snake.FailFast)` (stop on first error) or `snake.RunAll` (run disjoint paths).
 - `AllowFailure`: use `WithAllowFailure(true)` for non-critical tasks that shouldn't stop the workflow.
 - `Fail-fast`: under FailFast strategy, the first failure cancels remaining work; unstarted tasks become `CANCELLED`.
+
+## Advanced Features
+
+### Conditional Execution
+
+Tasks can be skipped based on runtime conditions using `WithCondition`.
+
+```go
+check := snake.NewTask("check", func(c context.Context, ctx *snake.Context) error {
+    // ... logic ...
+    return nil
+}, snake.WithCondition(func(c context.Context, ctx *snake.Context) bool {
+    // Return true to run the task, false to skip it
+    return shouldRun()
+}))
+```
+
+If a task is skipped, its status becomes `SKIPPED`. Dependent tasks will still run unless they depend on the skipped task's output (logic for this is determined by your application, but generally the engine propagates execution to dependents).
+
+### Concurrency Control
+
+Limit the number of parallel tasks using `WithMaxConcurrency`.
+
+```go
+engine := snake.NewEngine(
+    snake.WithMaxConcurrency(5), // Run at most 5 tasks in parallel
+)
+```
+
+### Middleware & Recovery
+
+Snake supports middleware chains similar to web frameworks. A common use case is panic recovery.
+
+```go
+// Add recovery middleware to handle panics in tasks safely
+engine.Use(snake.Recovery())
+```
+
+### Task Options
+
+Full list of options for `NewTask`:
+
+- `WithDependsOn(tasks ...*Task)`: Declare upstream dependencies.
+- `WithTimeout(d time.Duration)`: Set a hard timeout for this task.
+- `WithCondition(fn ConditionFunc)`: dynamic skipping logic.
+- `WithAllowFailure(allow bool)`: If true, failure won't cancel the entire execution (under FailFast).
+- `WithMiddlewares(m ...HandlerFunc)`: Add task-specific middleware.
+
 
 ## Observability and debugging
 

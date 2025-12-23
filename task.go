@@ -68,7 +68,7 @@ func WithTimeout(timeout time.Duration) TaskOption {
 // WithMiddlewares sets the middlewares for a task
 func WithMiddlewares(middlewares ...HandlerFunc) TaskOption {
 	return func(t *Task) {
-		t.middlewares = middlewares
+		t.middlewares = append(t.middlewares, middlewares...)
 	}
 }
 

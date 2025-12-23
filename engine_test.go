@@ -1239,7 +1239,7 @@ func TestContextCancellation_UnstartedTasksCancelled(t *testing.T) {
 	task2 := NewTask("task2", func(c context.Context, ctx *Context) error {
 		t.Fatal("task2 should not have started")
 		return nil
-	})
+	}, WithDependsOn(task1))
 
 	err := engine.Register(task1, task2)
 	assert.NoError(t, err)

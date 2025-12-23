@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -254,7 +253,6 @@ func (e *Engine) topologicalSort() ([]string, error) {
 // executionState holds the runtime state for a single DAG execution
 type executionState struct {
 	executionID string
-	pendingDeps map[string]*atomic.Int32
 	readyQueue  chan string
 	store       Datastore
 	taskIDs     []string
@@ -319,14 +317,6 @@ func (e *Engine) Execute(ctx context.Context, input any) (*ExecutionResult, erro
 	// Generate unique ExecutionID using UUID
 	executionID := uuid.New().String()
 
-	// Initialize pendingDeps map with atomic.Int32 for each task
-	pendingDeps := make(map[string]*atomic.Int32)
-	for taskID, indegree := range indegreeSnapshot {
-		counter := &atomic.Int32{}
-		counter.Store(int32(indegree))
-		pendingDeps[taskID] = counter
-	}
-
 	// Create ready queue channel
 	readyQueue := make(chan string, tasksCount)
 
@@ -340,7 +330,6 @@ func (e *Engine) Execute(ctx context.Context, input any) (*ExecutionResult, erro
 	// Create execution state
 	state := &executionState{
 		executionID: executionID,
-		pendingDeps: pendingDeps,
 		readyQueue:  readyQueue,
 		store:       store,
 		taskIDs:     taskIDs,
@@ -404,11 +393,6 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 
 	reports := make(map[string]*TaskReport)
 
-	localPendingDeps := make(map[string]int, len(indegree))
-	for k, v := range indegree {
-		localPendingDeps[k] = v
-	}
-
 	tasksCompleted := 0
 	tasksTotal := tasksCount
 
@@ -427,6 +411,66 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 		}
 	}
 
+	// checkDependents checks if a task's dependents are ready to run
+	checkDependents := func(completedTaskID string) {
+		for _, dependentID := range adj[completedTaskID] {
+			indegree[dependentID]--
+			if indegree[dependentID] == 0 {
+				// Check upstream status for the dependent task
+				depTask := e.tasks[dependentID]
+				var upstreamErr error
+				var upstreamSkipped bool
+
+				for _, parentID := range depTask.dependsOn {
+					parentReport := reports[parentID]
+					if parentReport == nil {
+						continue // Should not happen if logic is correct
+					}
+					// If parent failed/cancelled and allowFailure is false -> dependent fails
+					if parentReport.Status == TaskStatusFailed || parentReport.Status == TaskStatusCancelled {
+						if !e.tasks[parentID].allowFailure {
+							upstreamErr = fmt.Errorf("upstream task %s failed or cancelled", parentID)
+						}
+					}
+					// If any parent skipped -> dependent might skip
+					if parentReport.Status == TaskStatusSkipped {
+						upstreamSkipped = true
+					}
+				}
+
+				if upstreamErr != nil {
+					// Cancel propagation: Send synthetic result
+					resultsChan <- taskResult{
+						TaskID: dependentID,
+						Report: &TaskReport{
+							TaskID:    dependentID,
+							Status:    TaskStatusCancelled,
+							Err:       upstreamErr,
+							StartTime: time.Now(),
+							EndTime:   time.Now(),
+							Duration:  0,
+						},
+					}
+				} else if upstreamSkipped {
+					// Skip propagation: Send synthetic result
+					resultsChan <- taskResult{
+						TaskID: dependentID,
+						Report: &TaskReport{
+							TaskID:    dependentID,
+							Status:    TaskStatusSkipped,
+							StartTime: time.Now(),
+							EndTime:   time.Now(),
+							Duration:  0,
+						},
+					}
+				} else {
+					// Ready to run
+					pushReady(dependentID)
+				}
+			}
+		}
+	}
+
 coordinatorLoop:
 	// Loop until all tasks are accounted for
 	for tasksCompleted < tasksTotal {
@@ -435,65 +479,8 @@ coordinatorLoop:
 			tasksCompleted++
 			reports[res.TaskID] = res.Report
 
-			// Handle Task Success
-			if res.Report.Status == TaskStatusSuccess || res.Report.Status == TaskStatusSkipped {
-				// Decrement dependencies for children
-				for _, dependentID := range adj[res.TaskID] {
-					localPendingDeps[dependentID]--
-					if localPendingDeps[dependentID] == 0 {
-						// Check upstream status for the dependent task
-						depTask := e.tasks[dependentID]
-						var upstreamErr error
-						var upstreamSkipped bool
-
-						for _, parentID := range depTask.dependsOn {
-							parentReport := reports[parentID]
-							if parentReport == nil {
-								continue
-							}
-							if parentReport.Status == TaskStatusFailed || parentReport.Status == TaskStatusCancelled {
-								if !e.tasks[parentID].allowFailure {
-									upstreamErr = fmt.Errorf("upstream task %s failed or cancelled", parentID)
-								}
-							}
-							if parentReport.Status == TaskStatusSkipped {
-								upstreamSkipped = true
-							}
-						}
-
-						if upstreamErr != nil {
-							// Cancel propagation: Send synthetic result
-							resultsChan <- taskResult{
-								TaskID: dependentID,
-								Report: &TaskReport{
-									TaskID:    dependentID,
-									Status:    TaskStatusCancelled,
-									Err:       upstreamErr,
-									StartTime: time.Now(),
-									EndTime:   time.Now(),
-									Duration:  0,
-								},
-							}
-						} else if upstreamSkipped {
-							// Skip propagation: Send synthetic result
-							resultsChan <- taskResult{
-								TaskID: dependentID,
-								Report: &TaskReport{
-									TaskID:    dependentID,
-									Status:    TaskStatusSkipped,
-									StartTime: time.Now(),
-									EndTime:   time.Now(),
-									Duration:  0,
-								},
-							}
-						} else {
-							// Ready to run
-							pushReady(dependentID)
-						}
-					}
-				}
-			} else {
-				// Task Failed or Cancelled
+			// Process failure/cancellation first for FailFast check
+			if res.Report.Status == TaskStatusFailed || res.Report.Status == TaskStatusCancelled {
 				if res.Err != nil {
 					if firstErr == nil {
 						firstErr = res.Err
@@ -507,63 +494,11 @@ coordinatorLoop:
 						break coordinatorLoop
 					}
 				}
-
-				// Decrement dependents for failed tasks so they can resolve (and likely cancel)
-				for _, dependentID := range adj[res.TaskID] {
-					localPendingDeps[dependentID]--
-					if localPendingDeps[dependentID] == 0 {
-
-						depTask := e.tasks[dependentID]
-						var upstreamErr error
-
-						for _, parentID := range depTask.dependsOn {
-							parentReport := reports[parentID]
-							if parentReport != nil && (parentReport.Status == TaskStatusFailed || parentReport.Status == TaskStatusCancelled) {
-								if !e.tasks[parentID].allowFailure {
-									upstreamErr = fmt.Errorf("upstream task %s failed or cancelled", parentID)
-								}
-							}
-						}
-
-						if upstreamErr != nil {
-							resultsChan <- taskResult{
-								TaskID: dependentID,
-								Report: &TaskReport{
-									TaskID:    dependentID,
-									Status:    TaskStatusCancelled,
-									Err:       upstreamErr,
-									StartTime: time.Now(),
-									EndTime:   time.Now(),
-									Duration:  0,
-								},
-							}
-						} else {
-							upstreamSkipped := false
-							for _, parentID := range depTask.dependsOn {
-								parentReport := reports[parentID]
-								if parentReport != nil && parentReport.Status == TaskStatusSkipped {
-									upstreamSkipped = true
-								}
-							}
-
-							if upstreamSkipped {
-								resultsChan <- taskResult{
-									TaskID: dependentID,
-									Report: &TaskReport{
-										TaskID:    dependentID,
-										Status:    TaskStatusSkipped,
-										StartTime: time.Now(),
-										EndTime:   time.Now(),
-										Duration:  0,
-									},
-								}
-							} else {
-								pushReady(dependentID)
-							}
-						}
-					}
-				}
 			}
+
+			// For any completion state (Success, Failed, Skipped, Cancelled), we verify dependents
+			// If a task failed, its dependents will see the failure via reports[] check in checkDependents
+			checkDependents(res.TaskID)
 
 		case <-ctx.Done():
 			// Context Cancelled (Global Timeout or External Cancel)
