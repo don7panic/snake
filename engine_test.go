@@ -63,8 +63,7 @@ func TestExecute_CreatesNewDatastore(t *testing.T) {
 
 	// Execute and verify Datastore is empty
 	result, err := engine.Execute(context.Background(), nil)
-	// When tasks fail (due to errors or timeouts), Execute may return an error
-	// We should still get a valid result even if there's an error
+	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.NotNil(t, result.Store)
 
@@ -109,8 +108,7 @@ func TestExecute_DisconnectedGraphs(t *testing.T) {
 
 	// Execute to verify both subgraphs are handled
 	result, err := engine.Execute(context.Background(), nil)
-	// When tasks fail (due to errors or timeouts), Execute may return an error
-	// We should still get a valid result even if there's an error
+	assert.NoError(t, err)
 	assert.NotNil(t, result)
 }
 
@@ -158,8 +156,7 @@ func TestFailFast_MarksTaskAsFailed(t *testing.T) {
 
 	// Execute
 	result, err := engine.Execute(context.Background(), nil)
-	// When tasks fail (due to errors or timeouts), Execute may return an error
-	// We should still get a valid result even if there's an error
+	assert.ErrorIs(t, err, expectedErr)
 	assert.NotNil(t, result)
 
 	// Verify task is marked as FAILED
@@ -205,8 +202,7 @@ func TestFailFast_CancelsExecutionContext(t *testing.T) {
 
 	// Execute
 	result, err := engine.Execute(context.Background(), nil)
-	// When tasks fail (due to errors or timeouts), Execute may return an error
-	// We should still get a valid result even if there's an error
+	assert.ErrorIs(t, err, assert.AnError)
 	assert.NotNil(t, result)
 
 	// Verify execution failed
@@ -266,8 +262,7 @@ func TestFailFast_MarksPendingTasksAsCancelled(t *testing.T) {
 
 	// Execute
 	result, err := engine.Execute(context.Background(), nil)
-	// When tasks fail (due to errors or timeouts), Execute may return an error
-	// We should still get a valid result even if there's an error
+	assert.ErrorIs(t, err, assert.AnError)
 	assert.NotNil(t, result)
 
 	// Verify execution failed
@@ -323,8 +318,7 @@ func TestFailFast_ContinuesUntilActiveTasksComplete(t *testing.T) {
 
 	// Execute
 	result, err := engine.Execute(context.Background(), nil)
-	// When tasks fail (due to errors or timeouts), Execute may return an error
-	// We should still get a valid result even if there's an error
+	assert.ErrorIs(t, err, assert.AnError)
 	assert.NotNil(t, result)
 
 	// Verify execution failed
@@ -387,8 +381,7 @@ func TestFailFast_ExecutionResultContainsErrorDetails(t *testing.T) {
 
 	// Execute
 	result, err := engine.Execute(context.Background(), nil)
-	// When tasks fail (due to errors or timeouts), Execute may return an error
-	// We should still get a valid result even if there's an error
+	assert.ErrorIs(t, err, expectedErr)
 	assert.NotNil(t, result)
 
 	// Verify execution failed
@@ -447,8 +440,7 @@ func TestExecutionCompletion_AllTasksReachTerminalState(t *testing.T) {
 
 	// Execute
 	result, err := engine.Execute(context.Background(), nil)
-	// When tasks fail (due to errors or timeouts), Execute may return an error
-	// We should still get a valid result even if there's an error
+	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
 	// Verify all tasks reached terminal state (SUCCESS)
@@ -489,8 +481,7 @@ func TestExecutionResult_ContainsRequiredFields(t *testing.T) {
 
 	// Execute
 	result, err := engine.Execute(context.Background(), nil)
-	// When tasks fail (due to errors or timeouts), Execute may return an error
-	// We should still get a valid result even if there's an error
+	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
 	// Verify ExecutionResult contains all required fields
@@ -534,8 +525,7 @@ func TestExecutionResult_SuccessDetermination(t *testing.T) {
 		assert.NoError(t, err)
 
 		result, err := engine.Execute(context.Background(), nil)
-		// When tasks fail (due to errors or timeouts), Execute may return an error
-		// We should still get a valid result even if there's an error
+		assert.NoError(t, err)
 		assert.NotNil(t, result)
 		assert.True(t, result.Success, "Success should be true when all tasks succeed")
 	})
@@ -558,8 +548,7 @@ func TestExecutionResult_SuccessDetermination(t *testing.T) {
 		assert.NoError(t, err)
 
 		result, err := engine.Execute(context.Background(), nil)
-		// When tasks fail (due to errors or timeouts), Execute may return an error
-		// We should still get a valid result even if there's an error
+		assert.ErrorIs(t, err, assert.AnError)
 		assert.NotNil(t, result)
 		assert.False(t, result.Success, "Success should be false when any task fails")
 	})
@@ -583,8 +572,7 @@ func TestExecutionResult_SuccessDetermination(t *testing.T) {
 		assert.NoError(t, err)
 
 		result, err := engine.Execute(context.Background(), nil)
-		// When tasks fail (due to errors or timeouts), Execute may return an error
-		// We should still get a valid result even if there's an error
+		assert.ErrorIs(t, err, assert.AnError)
 		assert.NotNil(t, result)
 		assert.False(t, result.Success, "Success should be false when any task is cancelled")
 		assert.Equal(t, TaskStatusCancelled, result.Reports["task2"].Status)
@@ -625,8 +613,7 @@ func TestExecutionResult_GetResult(t *testing.T) {
 
 	// Execute
 	result, err := engine.Execute(context.Background(), nil)
-	// When tasks fail (due to errors or timeouts), Execute may return an error
-	// We should still get a valid result even if there's an error
+	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
 	// Verify GetResult method works on ExecutionResult
@@ -670,8 +657,7 @@ func TestExecutionResult_DatastoreAccess(t *testing.T) {
 
 	// Execute
 	result, err := engine.Execute(context.Background(), nil)
-	// When tasks fail (due to errors or timeouts), Execute may return an error
-	// We should still get a valid result even if there's an error
+	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
 	// Verify Store provides access to results
@@ -721,8 +707,7 @@ func TestTimeout_TaskSpecificTimeout(t *testing.T) {
 
 	// Execute
 	result, err := engine.Execute(context.Background(), nil)
-	// When tasks time out, Execute may return an error
-	// We should still get a valid result even if there's an error
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.NotNil(t, result)
 
 	// Verify execution failed
@@ -763,8 +748,7 @@ func TestTimeout_DefaultTimeout(t *testing.T) {
 
 	// Execute
 	result, err := engine.Execute(context.Background(), nil)
-	// When tasks time out, Execute may return an error
-	// We should still get a valid result even if there's an error
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.NotNil(t, result)
 
 	// Verify execution failed
@@ -800,8 +784,7 @@ func TestTimeout_TaskTimeoutOverridesDefault(t *testing.T) {
 
 	// Execute
 	result, err := engine.Execute(context.Background(), nil)
-	// When tasks time out, Execute may return an error
-	// We should still get a valid result even if there's an error
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.NotNil(t, result)
 
 	// Verify execution failed
@@ -836,8 +819,7 @@ func TestTimeout_NoTimeoutConfigured(t *testing.T) {
 
 	// Execute
 	result, err := engine.Execute(context.Background(), nil)
-	// When tasks fail (due to errors or timeouts), Execute may return an error
-	// We should still get a valid result even if there's an error
+	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
 	// Verify execution succeeded
@@ -872,8 +854,7 @@ func TestTopologicalSort_ComplexDependencies(t *testing.T) {
 	assert.NoError(t, err)
 
 	result, err := engine.Execute(context.Background(), nil)
-	// When tasks fail (due to errors or timeouts), Execute may return an error
-	// We should still get a valid result even if there's an error
+	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Len(t, result.TopoOrder, 4)
 
@@ -917,8 +898,7 @@ func TestTopologicalSort_DisconnectedGraphs(t *testing.T) {
 	assert.NoError(t, err)
 
 	result, err := engine.Execute(context.Background(), nil)
-	// When tasks fail (due to errors or timeouts), Execute may return an error
-	// We should still get a valid result even if there's an error
+	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Len(t, result.TopoOrder, 3)
 
@@ -1060,8 +1040,7 @@ func TestExecuteTask_NilInput(t *testing.T) {
 
 	// Execute with nil input
 	result, err := engine.Execute(context.Background(), nil)
-	// When tasks fail (due to errors or timeouts), Execute may return an error
-	// We should still get a valid result even if there's an error
+	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.True(t, result.Success)
 
@@ -1095,7 +1074,8 @@ func TestMiddleware_PanicRecovery_Mechanism(t *testing.T) {
 	assert.False(t, result.Success)
 	assert.Equal(t, TaskStatusFailed, result.Reports["panic-task"].Status)
 	assert.Contains(t, result.Reports["panic-task"].Err.Error(), "panic recovered: oops")
-	assert.NotNil(t, err) // Engine Execute returns first error
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "panic recovered: oops")
 }
 
 func TestErrorStrategy_RunAll_AllowsIndependentTasksToComplete(t *testing.T) {
@@ -1107,7 +1087,8 @@ func TestErrorStrategy_RunAll_AllowsIndependentTasksToComplete(t *testing.T) {
 		return nil
 	})
 	eFast.Register(t1_fail, t2_ok)
-	resFast, _ := eFast.Execute(context.Background(), nil)
+	resFast, err := eFast.Execute(context.Background(), nil)
+	assert.ErrorIs(t, err, assert.AnError)
 
 	// In FailFast, t2 might be cancelled or might succeed depending on race,
 	// but the execution itself is marked Failed
@@ -1145,7 +1126,8 @@ func TestErrorStrategy_RunAll(t *testing.T) {
 
 	engine.Register(t1, t2, t3, t1_allowed, t5_dep_allowed)
 
-	res, _ := engine.Execute(context.Background(), nil)
+	res, err := engine.Execute(context.Background(), nil)
+	assert.ErrorIs(t, err, assert.AnError)
 
 	// t1 failed
 	assert.Equal(t, TaskStatusFailed, res.Reports["t1"].Status)
@@ -1165,6 +1147,28 @@ func TestErrorStrategy_RunAll(t *testing.T) {
 	// Overall success?
 	// t1 failed (critical) -> Success = false
 	assert.False(t, res.Success)
+}
+
+func TestExecute_AllowFailureDoesNotReturnError(t *testing.T) {
+	engine := NewEngine(WithErrorStrategy(FailFast))
+
+	t1Allowed := NewTask("t1_allow", func(c context.Context, ctx *Context) error {
+		return assert.AnError
+	}, WithAllowFailure(true))
+
+	t2 := NewTask("t2", func(c context.Context, ctx *Context) error {
+		return nil
+	}, WithDependsOn(t1Allowed))
+
+	err := engine.Register(t1Allowed, t2)
+	assert.NoError(t, err)
+
+	result, execErr := engine.Execute(context.Background(), nil)
+	assert.NoError(t, execErr)
+	assert.NotNil(t, result)
+	assert.True(t, result.Success)
+	assert.Equal(t, TaskStatusFailed, result.Reports["t1_allow"].Status)
+	assert.Equal(t, TaskStatusSuccess, result.Reports["t2"].Status)
 }
 
 // TestFailFast_MaxConcurrency1_UnstartedTasksCancelled verifies that with maxConcurrency=1,
@@ -1199,7 +1203,7 @@ func TestFailFast_MaxConcurrency1_UnstartedTasksCancelled(t *testing.T) {
 	// Execute
 	result, execErr := engine.Execute(context.Background(), nil)
 	assert.NotNil(t, result)
-	assert.Error(t, execErr) // Should return the first error
+	assert.ErrorIs(t, execErr, assert.AnError)
 
 	// Verify task1 failed
 	assert.Equal(t, TaskStatusFailed, result.Reports["task1"].Status)

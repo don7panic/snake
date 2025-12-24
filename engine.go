@@ -3,6 +3,7 @@ package snake
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"time"
 
@@ -65,7 +66,9 @@ func WithLogger(logger Logger) Option {
 // WithMaxConcurrency limits concurrent task executions. Non-positive means unlimited.
 func WithMaxConcurrency(max int) Option {
 	return func(e *Engine) {
-		e.maxConcurrency = max
+		if max > 0 {
+			e.maxConcurrency = max
+		}
 	}
 }
 
@@ -101,10 +104,11 @@ func NewEngine(opts ...Option) *Engine {
 		storeFactory: func() Datastore {
 			return newMemoryStore()
 		},
-		logger:        newDefaultLogger(),
-		adj:           make(map[string][]string),
-		indegree:      make(map[string]int),
-		errorStrategy: FailFast,
+		logger:         newDefaultLogger(),
+		adj:            make(map[string][]string),
+		indegree:       make(map[string]int),
+		maxConcurrency: runtime.GOMAXPROCS(0),
+		errorStrategy:  FailFast,
 	}
 
 	// Apply all provided options
@@ -258,8 +262,9 @@ type executionState struct {
 	input       any
 }
 
-// Execute runs the DAG with the provided context and input
-// It initializes execution state and schedules tasks for parallel execution
+// Execute runs the DAG with the provided context and input.
+// On successful execution (including allow-failure tasks), err is nil and result.Success is true.
+// On execution failure, err is set (first non-allowed task error or context error) and result is still returned.
 func (e *Engine) Execute(ctx context.Context, input any) (*ExecutionResult, error) {
 	// Quick snapshot
 	e.mu.RLock()
@@ -351,7 +356,7 @@ type taskResult struct {
 // executeParallel schedules and executes tasks using a worker pool and event loop.
 // It eliminates lock contention by centralizing state management in the coordinator loop.
 func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj map[string][]string, indegree map[string]int) (*ExecutionResult, error) {
-	// 1. Setup Channels
+	// Setup Channels
 	// readyQueue: Buffered to hold task IDs waiting for workers
 	// resultsChan: Buffered to avoid workers blocking when sending results
 	tasksCount := len(e.tasks)
@@ -359,10 +364,10 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 	// Note: readyQueue is already created in Execute
 	resultsChan := make(chan taskResult, tasksCount)
 
-	// 2. Start Workers
+	// Start Workers
 	concurrency := e.maxConcurrency
 	if concurrency <= 0 {
-		concurrency = tasksCount
+		concurrency = runtime.GOMAXPROCS(0)
 	}
 	if concurrency > tasksCount {
 		concurrency = tasksCount
@@ -382,7 +387,7 @@ func (e *Engine) executeParallel(ctx context.Context, state *executionState, adj
 		}()
 	}
 
-	// 3. Coordinator Loop (Main Thread)
+	// Coordinator Loop (Main Thread)
 	// Manages state: reports, pendingDeps, scheduling
 
 	reports := make(map[string]*TaskReport)
@@ -564,6 +569,11 @@ coordinatorLoop:
 				}
 			}
 		}
+	}
+
+	// Align error return with success: only surface errors for failed executions.
+	if success {
+		firstErr = nil
 	}
 
 	result := &ExecutionResult{

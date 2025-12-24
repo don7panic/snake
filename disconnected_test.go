@@ -275,8 +275,7 @@ func TestDisconnectedGraph_FailFastCancelsAllSubgraphs(t *testing.T) {
 
 	// Execute
 	result, err := engine.Execute(context.Background(), nil)
-	// In fail-fast mode, Execute may return an error when tasks fail
-	// We should still get a valid result even if there's an error
+	assert.ErrorIs(t, err, assert.AnError)
 	assert.NotNil(t, result)
 
 	// Verify execution failed
@@ -381,8 +380,7 @@ func TestDisconnectedGraph_AllTasksReachTerminalState(t *testing.T) {
 
 	// Execute
 	result, err := engine.Execute(context.Background(), nil)
-	// In fail-fast mode, Execute may return an error when tasks fail
-	// We should still get a valid result even if there's an error
+	assert.ErrorIs(t, err, assert.AnError)
 	assert.NotNil(t, result)
 
 	// Verify execution failed

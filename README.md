@@ -1,199 +1,163 @@
 # snake
 
-Lightweight in-process DAG orchestrator for Go. Declare explicit dependencies, share data across tasks, run work in parallel, and extend execution with pluggable middleware (recovery, tracing, logging, metrics, and more).
+A lightweight, in-process DAG (Directed Acyclic Graph) task orchestrator for Go.
+
+
+Snake allows you to define tasks with explicit dependencies, share data type-safely, and execute them in parallel. It follows a "code-as-configuration" approach and provides a Gin-like middleware system for easy extensibility.
+
+[中文版](./README_CN.md) | [English](./README.md)
+
+
+## Features
+
+- **explicit Dependency Management**: Declare dependencies using Task IDs. The engine automatically builds the DAG and schedules tasks.
+- **Parallel Execution**: Independent tasks run concurrently. Contains a built-in worker pool and event-driven scheduler.
+- **Type-Safe Data Sharing**: Use generic `Key[T]` helpers to pass data between tasks without messy type assertions.
+- **Middleware Support**: Extend functionality with global or task-level middleware (logging, tracing, recovery, etc.).
+- **Context Propagation**: Each task gets a unified context carrying input, storage access, logger, and cancellation signals.
+- **Flexible Error Handling**: Choose between `FailFast` (default) or `RunAll` strategies. Support for non-critical tasks via `AllowFailure`.
+
+## Installation
 
 ```bash
 go get github.com/don7panic/snake
 ```
 
-For the Chinese version, see `README.zh.md`.
+## Quick Start
 
-## Why snake
-
-- Explicit dependency graph: declare upstream tasks by `TaskID`; the engine builds a DAG and schedules tasks in topo order with parallel fan-out.
-- Built-in datastore: concurrent-safe `ctx.SetResult`/`ctx.GetResult` for passing results; keys can be task IDs or custom strings to support multiple outputs.
-- Middleware chain: gin-style `HandlerFunc` chain with global and task-level middleware.
-- Error strategies: choose between `FailFast` (default) or `RunAll` (execute all independent tasks).
-- Failure tolerance: per-task `WithAllowFailure(true)` to skip global cancellation on specific task failures.
-- Timeouts: global timeout (`WithGlobalTimeout`) plus default/task-level timeouts.
-- Debug-friendly outputs: `ExecutionResult` exposes per-task reports and the exact `TopoOrder`.
-- Reusable engine: build the DAG once, then execute it multiple times (even concurrently) with different inputs.
-
-## Quick start
+Here is a complete example showing how to define tasks, share data safely, and execute a workflow.
 
 ```go
 package main
 
 import (
-    "context"
-    "fmt"
-    "time"
+	"context"
+	"fmt"
+	"time"
 
-    "github.com/don7panic/snake"
+	"github.com/don7panic/snake"
 )
 
-// Input passed to a single Execute call
-type WorkflowInput struct {
-    Value string
+// 1. Define typed keys for data sharing
+var (
+	KeyUserID   = snake.NewKey[int]("user_id")
+	KeyUserName = snake.NewKey[string]("user_name")
+)
+
+type UserInput struct {
+	ID int
 }
 
 func main() {
-    engine := snake.NewEngine(
-        snake.WithGlobalTimeout(30*time.Second),
-        snake.WithDefaultTaskTimeout(2*time.Second),
-    )
+	// 2. Initialize Engine
+	engine := snake.NewEngine(
+		snake.WithLogger(snake.NewDefaultLogger()),
+		snake.WithMaxConcurrency(5),
+	)
 
-    // Global middleware for logging/tracing/recovery
-    engine.Use(func(c context.Context, ctx *snake.Context) error {
-        fmt.Println("start", ctx.TaskID())
-        err := ctx.Next(c)
-        fmt.Println("done", ctx.TaskID(), "err:", err)
-        return err
-    })
-
-    a := snake.NewTask("A", func(c context.Context, ctx *snake.Context) error {
-        input, ok := ctx.Input().(*WorkflowInput)
-        if !ok {
-            return fmt.Errorf("invalid input type")
-        }
-
-        ctx.SetResult("A", fmt.Sprintf("processed: %s", input.Value))
-        return nil
-    })
-
-	b := snake.NewTask("B", func(c context.Context, ctx *snake.Context) error {
-		v, _ := ctx.GetResult("A") // read upstream result
-		ctx.SetResult("B", fmt.Sprintf("b got %v", v))
+	// 3. Define Tasks
+	
+	// Task A: Fetch user data
+	taskFetch := snake.NewTask("fetch_user", func(c context.Context, ctx *snake.Context) error {
+		input := ctx.Input().(*UserInput) // Get execution input
+		
+		// Simulate data fetching
+		time.Sleep(100 * time.Millisecond)
+		name := fmt.Sprintf("User-%d", input.ID)
+		
+		// Save result type-safely
+		snake.SetTyped(ctx, KeyUserName, name)
+		
+		ctx.Logger().Info(c, "fetched user", snake.Field{Key: "name", Value: name})
 		return nil
-	}, snake.WithDependsOn(a))
+	})
 
-    if err := engine.Register(a, b); err != nil {
-        panic(err)
-    }
+	// Task B: Process user data (depends on A)
+	taskProcess := snake.NewTask("process_user", func(c context.Context, ctx *snake.Context) error {
+		// Read upstream result type-safely
+		name, ok := snake.GetTyped(ctx, KeyUserName)
+		if !ok {
+			return fmt.Errorf("user name not found")
+		}
+		
+		fmt.Printf("Processing user: %s\n", name)
+		return nil
+	}, snake.WithDependsOn(taskFetch)) // Declare dependency
 
-    // Validate DAG: checks missing deps and cycles
-    if err := engine.Build(); err != nil {
-        panic(err)
-    }
+	// 4. Register Tasks
+	if err := engine.Register(taskFetch, taskProcess); err != nil {
+		panic(err)
+	}
 
-    input := &WorkflowInput{Value: "hello"}
-    result, err := engine.Execute(context.Background(), input)
-    if err != nil {
-        panic(err)
-    }
-
-    fmt.Println("success:", result.Success)
-    fmt.Println("topo:", result.TopoOrder) // e.g. [A B]
-
-    if v, ok := result.GetResult("B"); ok {
-        fmt.Println("B result:", v)
-    }
-
-    // Reuse the same engine with new inputs
-    input2 := &WorkflowInput{Value: "world"}
-    result2, err := engine.Execute(context.Background(), input2)
-    if err != nil {
-        panic(err)
-    }
-    fmt.Println("second execution success:", result2.Success)
+	// 5. Execute
+	// You can reuse the engine for distinct executions with different inputs
+	input := &UserInput{ID: 42}
+	result, err := engine.Execute(context.Background(), input)
+	
+	if err != nil {
+		fmt.Printf("Execution failed: %v\n", err)
+	} else {
+		fmt.Printf("Success! Order: %v\n", result.TopoOrder)
+	}
 }
 ```
 
-## Core concepts
+## Core Concepts
 
-- `Task`: handler signature `func(c context.Context, ctx *snake.Context) error`. Use `ctx.Next(c)` to step through middleware; place the business handler at the end of the chain.
-- `Context`: exposes the execution input (`ctx.Input()`), datastore helpers (`SetResult`/`GetResult`), and task metadata (`TaskID`, deadlines, logger).
-- `Datastore`: each `Execute` call gets a fresh store; customize via `WithDatastoreFactory` if you need a different backend.
-- `Timeouts`: set defaults with `WithDefaultTaskTimeout`, override per task with `WithTimeout(d)`.
-- `Error Handling`: `WithErrorStrategy(snake.FailFast)` (stop on first error) or `snake.RunAll` (run disjoint paths).
-- `AllowFailure`: use `WithAllowFailure(true)` for non-critical tasks that shouldn't stop the workflow.
-- `Fail-fast`: under FailFast strategy, the first failure cancels remaining work; unstarted tasks become `CANCELLED`.
+### Engine
+The `Engine` is the central coordinator. It validates the DAG and manages the worker pool. It is thread-safe and designed to be built once and executed multiple times.
 
-## Advanced Features
+### Context
+Each task execution receives a `*snake.Context`. It wraps the standard `context.Context` and provides:
+- **Input**: Access the input data passed to `Execute`.
+- **Store**: Read/Write access to the execution-scoped Datastore.
+- **Logger**: A structured logger.
+- **Next**: Logic to advance middleware chain.
 
-### Conditional Execution
-
-Tasks can be skipped based on runtime conditions using `WithCondition`.
+### Type-Safe Data Sharing
+Instead of using raw strings keys and `interface{}` values, use `snake.Key[T]`:
 
 ```go
-check := snake.NewTask("check", func(c context.Context, ctx *snake.Context) error {
-    // ... logic ...
-    return nil
-}, snake.WithCondition(func(c context.Context, ctx *snake.Context) bool {
-    // Return true to run the task, false to skip it
-    return shouldRun()
-}))
+var KeyCount = snake.NewKey[int]("count")
+
+// Write
+snake.SetTyped(ctx, KeyCount, 100)
+
+// Read
+count, ok := snake.GetTyped(ctx, KeyCount) // count is int
 ```
 
-If a task is skipped, its status becomes `SKIPPED`. Dependent tasks will still run unless they depend on the skipped task's output (logic for this is determined by your application, but generally the engine propagates execution to dependents).
+## Advanced Usage
 
-### Concurrency Control
-
-Limit the number of parallel tasks using `WithMaxConcurrency`.
+### Middleware
+Middleware allows you to wrap task execution with common logic.
 
 ```go
-engine := snake.NewEngine(
-    snake.WithMaxConcurrency(5), // Run at most 5 tasks in parallel
+// Add panic recovery middleware
+engine.Use(snake.Recovery())
+
+// Custom middleware
+engine.Use(func(c context.Context, ctx *snake.Context) error {
+    start := time.Now()
+    defer func() {
+        fmt.Printf("Task %s took %v\n", ctx.TaskID(), time.Since(start))
+    }()
+    return ctx.Next(c)
+})
+```
+
+### Conditional Execution
+Skip tasks dynamically at runtime:
+
+```go
+task := snake.NewTask("optional_task", handler, 
+    snake.WithCondition(func(c context.Context, ctx *snake.Context) bool {
+        // Return false to skip this task
+        return shouldRun()
+    }),
 )
 ```
 
-### Middleware & Recovery
-
-Snake supports middleware chains similar to web frameworks. A common use case is panic recovery.
-
-```go
-// Add recovery middleware to handle panics in tasks safely
-engine.Use(snake.Recovery())
-```
-
-### Task Options
-
-Full list of options for `NewTask`:
-
-- `WithDependsOn(tasks ...*Task)`: Declare upstream dependencies.
-- `WithTimeout(d time.Duration)`: Set a hard timeout for this task.
-- `WithCondition(fn ConditionFunc)`: dynamic skipping logic.
-- `WithAllowFailure(allow bool)`: If true, failure won't cancel the entire execution (under FailFast).
-- `WithMiddlewares(m ...HandlerFunc)`: Add task-specific middleware.
-
-
-## Observability and debugging
-
-- `ExecutionResult.Reports` includes per-task status, error, and duration.
-- `ExecutionResult.TopoOrder` shows the actual execution order for quick inspection.
-- Extend logging/tracing/metrics/rate limiting through middleware.
-
-## Development
-
-```bash
-# Run tests
-go test ./...
-
-# Coverage
-go test -v -cover ./...
-
-# Format code
-go fmt ./...
-
-# Static checks
-go vet ./...
-```
-
-## Examples
-
-See `examples/` for runnable samples:
-- `examples/recovery_example.go` - recovery middleware
-- `examples/custom_store_test.go` - custom datastore
-- `examples/e2e/order_workflow.go` - end-to-end order flow
-
-## Architecture
-
-High-level design notes live in `docs/ARCHITECTURE.md`.
-
-## Contributing
-
-Issues and pull requests are welcome.
-
 ## License
 
-MIT License
+MIT
