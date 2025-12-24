@@ -20,6 +20,17 @@ type Context struct {
 
 	// input holds the execution-specific input parameter
 	input any
+
+	// logger provides structured logging capability
+	logger Logger
+}
+
+// Logger returns the logger associated with this context
+func (ctx *Context) Logger() Logger {
+	if ctx.logger == nil {
+		return NewDefaultLogger()
+	}
+	return ctx.logger
 }
 
 // Next advances to the next handler in the middleware chain

@@ -255,7 +255,6 @@ type executionState struct {
 	executionID string
 	readyQueue  chan string
 	store       Datastore
-	taskIDs     []string
 	input       any
 }
 
@@ -297,10 +296,6 @@ func (e *Engine) Execute(ctx context.Context, input any) (*ExecutionResult, erro
 	// Snapshot DAG data for safe concurrent Execute calls
 	e.mu.RLock()
 	tasksCount := len(e.tasks)
-	taskIDs := make([]string, 0, tasksCount)
-	for id := range e.tasks {
-		taskIDs = append(taskIDs, id)
-	}
 	indegreeSnapshot := make(map[string]int, len(e.indegree))
 	for k, v := range e.indegree {
 		indegreeSnapshot[k] = v
@@ -332,7 +327,6 @@ func (e *Engine) Execute(ctx context.Context, input any) (*ExecutionResult, erro
 		executionID: executionID,
 		readyQueue:  readyQueue,
 		store:       store,
-		taskIDs:     taskIDs,
 		input:       input,
 	}
 
@@ -654,7 +648,6 @@ func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID
 	handlers = append(handlers, task.middlewares...)
 	handlers = append(handlers, task.handler)
 
-	// Create full task Context
 	// Unified context for both Condition check and Execution
 	ctx := &Context{
 		taskID:      taskID,
@@ -664,6 +657,7 @@ func (e *Engine) executeTask(execCtx context.Context, taskID string, executionID
 		handlers:    handlers,
 		index:       -1, // Start at -1 so first Next() call advances to 0
 		input:       input,
+		logger:      e.logger,
 	}
 
 	// Check Condition using the full context
