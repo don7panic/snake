@@ -2,89 +2,121 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Development Commands
+## Project Overview
 
-### Common Development Tasks
-- **Run tests**: `make test` or `go test -v ./...`
-- **Run single test**: `go test -v -run TestFunctionName ./...`
-- **Build project**: `make build` or `go build -v ./...`
-- **Format code**: `make fmt` or `go fmt ./...`
-- **Lint code**: `make lint` (requires staticcheck)
-- **Run all checks**: `make check` (runs fmt, vet, lint, test)
-- **Test with coverage**: `make test-coverage`
-- **Clean artifacts**: `make clean`
+snake is a lightweight in-process DAG (Directed Acyclic Graph) orchestrator for Go. It allows you to declare explicit task dependencies, share data across tasks, run work in parallel, and extend execution with pluggable middleware.
 
-### Dependencies
-- **Install/update dependencies**: `make deps`
+## Core Architecture
 
-## Architecture Overview
+The codebase follows a modular architecture with these key components:
 
-Snake is a Go-based DAG (Directed Acyclic Graph) execution engine for orchestrating parallel task execution with dependency management.
-
-### Core Components
 - **Engine**: Central orchestrator that manages task registry, DAG construction/validation, and parallel execution
 - **Task**: Self-contained execution units with dependencies, handlers, middlewares, and timeouts
 - **Context**: Task-level execution context providing datastore access, logging, and middleware chain execution
-- **Datastore**: Thread-safe key-value storage for inter-task communication (isolated per execution)
-- **Logger**: Structured logging interface with task-specific metadata
+- **Datastore**: Concurrent-safe key-value store for passing results between tasks
 
-### Key Architecture Patterns
+## Development Commands
 
-**Task Creation Pattern**:
-```go
-task := NewTask("taskID", handlerFunc,
-    WithDependsOn("dependency1", "dependency2"),
-    WithTimeout(30*time.Second),
-    WithMiddlewares(taskMiddleware...)
-)
+### Building and Testing
+```bash
+# Build the project
+go build -v ./...
+
+# Run all tests
+go test -v ./...
+
+# Run tests with race detector
+go test -race ./...
+
+# Run tests with coverage
+go test -v -race -coverprofile=coverage.out ./...
+go tool cover -html=coverage.out -o coverage.html
 ```
 
-**Engine Configuration Pattern**:
-```go
-engine := NewEngine(
-    WithFailFast(),
-    WithDefaultTaskTimeout(10*time.Second),
-    WithLogger(customLogger),
-)
+### Code Quality
+```bash
+# Format code
+go fmt ./...
+
+# Check formatting without changes
+make fmt-check
+
+# Run go vet
+go vet ./...
+
+# Run static analysis
+make lint
+
+# Run all checks
+make check
 ```
 
-**Registration and Execution Flow**:
-1. `engine.Register(task)` - Validate and add tasks to registry
-2. `engine.Build()` - Build DAG structure and validate no cycles
-3. `engine.Execute(ctx)` - Execute with fresh datastore and unique execution ID
+### Using Makefile
+```bash
+# Default target (fmt, vet, test, build)
+make
 
-### Concurrency and Execution Model
-- Uses Kahn's algorithm for cycle detection and topological sorting
-- Atomic counters track pending dependencies during parallel execution
-- Channel-based ready queue for task scheduling
-- Tasks become ready when all dependencies complete (pending count reaches zero)
-- Supports disconnected DAGs and Fail-Fast error strategy
+# Install dependencies
+make deps
 
-### Middleware Chain
-- Global middleware via `engine.Use(middleware...)`
-- Task-specific middleware via `WithMiddlewares(...)`
-- Execution order: Global → Task-specific → Handler
-- Use `ctx.Next()` to progress through middleware chain
+# Clean build artifacts
+make clean
+```
+
+## Key Design Patterns
+
+### Engine Usage Pattern
+1. Create Engine with options (`NewEngine`)
+2. Register Tasks with dependencies (`Register`)
+3. Build and validate DAG (`Build`)
+4. Execute with input parameters (`Execute`)
+
+Engine supports reuse - build once, execute multiple times with different inputs.
 
 ### Data Flow
-- Tasks communicate via the datastore using task IDs as keys
-- `ctx.SetResult(value)` - Store task output
-- `ctx.GetResult(taskID)` - Retrieve dependency outputs
-- Results also available via `ExecutionResult.GetResult(taskID)` after execution
+- Tasks declare dependencies through `WithDependsOn`
+- Data flows through `Datastore` using `SetResult`/`GetResult`
+- Input parameters are injected at execution time via `Context.Input()`
 
-## Testing Organization
+### Middleware System
+- Global middleware applied to all tasks via `engine.Use()`
+- Task-specific middleware via `WithMiddlewares()`
+- Chain execution managed through `ctx.Next()` pattern
 
-Tests are organized by component:
-- `engine_test.go` - Core engine functionality and execution lifecycle
-- `context_test.go` - Context behavior and middleware chain execution
-- `parallel_test.go` - Parallel execution scenarios and concurrency safety
-- `disconnected_test.go` - Non-connected DAG handling
+## Error Handling Strategies
 
-Key testing patterns include execution order verification, dependency chain validation, and goroutine synchronization for concurrent execution testing.
+- **FailFast** (default): Stop execution immediately on first task failure
+- **RunAll**: Attempt to execute all independent paths even if some tasks fail
 
-## Important Notes
+## Testing Approach
 
-- All task dependencies must be registered before calling `engine.Build()`
-- Execution results are isolated per run with fresh datastore instances
-- Timeout of zero means no timeout (uses configured default)
-- Task IDs must be unique across the entire engine registry
+The test suite is comprehensive and covers:
+- DAG execution with various dependency patterns
+- Concurrent execution scenarios
+- Error handling strategies
+- Middleware functionality
+- Datastore operations
+- Timeout and cancellation behavior
+
+Run specific test files with: `go test -v ./engine_test.go`
+
+## Important Implementation Details
+
+- Tasks are identified by unique string IDs
+- Datastore uses `map[string]any` with `sync.RWMutex` for thread safety
+- Execution results include per-task reports and topological order
+- Support for conditional execution via `WithCondition`
+- Concurrency control via `WithMaxConcurrency`
+
+## File Organization
+
+- Core components in root: `engine.go`, `task.go`, `context.go`, `datastore.go`, `types.go`
+- Tests follow Go conventions with `_test.go` suffix
+- Examples in `examples/` directory
+- Architecture documentation in `docs/ARCHITECTURE.md`
+
+When modifying the codebase, ensure:
+- All tests continue to pass
+- New functionality includes appropriate tests
+- Code follows existing patterns for Task creation and Engine configuration
+- Concurrency safety is maintained in Datastore operations
