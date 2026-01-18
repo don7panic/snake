@@ -1081,12 +1081,12 @@ func TestMiddleware_PanicRecovery_Mechanism(t *testing.T) {
 func TestErrorStrategy_RunAll_AllowsIndependentTasksToComplete(t *testing.T) {
 	// Start with default FailFast to verify baseline
 	eFast := NewEngine(WithErrorStrategy(FailFast))
-	t1_fail := NewTask("t1", func(c context.Context, ctx *Context) error { return assert.AnError })
-	t2_ok := NewTask("t2", func(c context.Context, ctx *Context) error {
+	t1Fail := NewTask("t1", func(c context.Context, ctx *Context) error { return assert.AnError })
+	t2Ok := NewTask("t2", func(c context.Context, ctx *Context) error {
 		time.Sleep(50 * time.Millisecond)
 		return nil
 	})
-	eFast.Register(t1_fail, t2_ok)
+	eFast.Register(t1Fail, t2Ok)
 	resFast, err := eFast.Execute(context.Background(), nil)
 	assert.ErrorIs(t, err, assert.AnError)
 
@@ -1115,16 +1115,16 @@ func TestErrorStrategy_RunAll(t *testing.T) {
 	}, WithDependsOn(t1))
 
 	// t1_allowed fails but has AllowFailure=true
-	t1_allowed := NewTask("t1_allow", func(c context.Context, ctx *Context) error {
+	t1Allowed := NewTask("t1_allow", func(c context.Context, ctx *Context) error {
 		return assert.AnError
 	}, WithAllowFailure(true))
 
 	// t5 depends on t1_allow (should run because parent failure is allowed)
-	t5_dep_allowed := NewTask("t5", func(c context.Context, ctx *Context) error {
+	t5DepAllowed := NewTask("t5", func(c context.Context, ctx *Context) error {
 		return nil
-	}, WithDependsOn(t1_allowed))
+	}, WithDependsOn(t1Allowed))
 
-	engine.Register(t1, t2, t3, t1_allowed, t5_dep_allowed)
+	engine.Register(t1, t2, t3, t1Allowed, t5DepAllowed)
 
 	res, err := engine.Execute(context.Background(), nil)
 	assert.ErrorIs(t, err, assert.AnError)

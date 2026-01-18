@@ -157,6 +157,18 @@ func (e *Engine) Register(tasks ...*Task) error {
 	return nil
 }
 
+// Tasks returns a list of all registered tasks
+func (e *Engine) Tasks() []*Task {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	tasks := make([]*Task, 0, len(e.tasks))
+	for _, task := range e.tasks {
+		tasks = append(tasks, task)
+	}
+	return tasks
+}
+
 // Build constructs and validates the DAG. Call this after all tasks are registered.
 func (e *Engine) Build() error {
 	e.mu.Lock()

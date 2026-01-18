@@ -98,3 +98,16 @@ type TaskReport struct {
 	EndTime   time.Time
 	Duration  time.Duration
 }
+
+// ID returns the unique identifier of the task
+func (t *Task) ID() string {
+	return t.id
+}
+
+// Dependencies returns the list of task IDs that this task depends on
+func (t *Task) Dependencies() []string {
+	// Return a copy to prevent modification
+	deps := make([]string, len(t.dependsOn))
+	copy(deps, t.dependsOn)
+	return deps
+}
