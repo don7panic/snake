@@ -1,5 +1,9 @@
 # snake
 
+<p align="center">
+  <img src="snake.png" height="200">
+</p>
+
 A lightweight, in-process DAG (Directed Acyclic Graph) task orchestrator for Go.
 
 
